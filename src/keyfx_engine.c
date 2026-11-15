@@ -1366,20 +1366,20 @@ static void ld_rebuild(void) {
     bool any = false;
 
     if (ld_cur >= 0) {
-        const struct ci_leader *L = &leaders[ld_cur];
+        const struct ci_leader *ldr = &leaders[ld_cur];
 
         for (uint8_t p = 0; p < CI_POSITIONS; p++) {
             const struct zmk_behavior_binding *b = eff_binding(p);
 
-            for (uint8_t s = 0; b && s < L->nseq && !pal[p]; s++) {
+            for (uint8_t s = 0; b && s < ldr->nseq && !pal[p]; s++) {
                 if (!(ld_alive & BIT(s))) {
                     continue;
                 }
-                for (uint8_t j = ld_depth; j < L->seqs[s].len; j++) {
-                    uint32_t code = L->seqs[s].codes[j];
+                for (uint8_t j = ld_depth; j < ldr->seqs[s].len; j++) {
+                    uint32_t code = ldr->seqs[s].codes[j];
 
                     if (code_usable(code) && bind_has(b, code)) {
-                        pal[p] = L->seqs[s].pal;
+                        pal[p] = ldr->seqs[s].pal;
                         any = true;
                         break;
                     }
@@ -1424,13 +1424,13 @@ static void ld_timeout_fn(struct k_work *work) {
 }
 
 static void ld_key(uint32_t code) {
-    const struct ci_leader *L = &leaders[ld_cur];
+    const struct ci_leader *ldr = &leaders[ld_cur];
 
     if ((code >> 16) == 0x07 && (code & 0xFFFF) >= 0xE0 && (code & 0xFFFF) <= 0xE7) {
         return; /* a bare modifier never ends or advances a sequence */
     }
-    for (uint8_t i = 0; i < L->n_ignore; i++) {
-        if ((L->ignore[i] & 0xFFFFFF) == (code & 0xFFFFFF)) {
+    for (uint8_t i = 0; i < ldr->n_ignore; i++) {
+        if ((ldr->ignore[i] & 0xFFFFFF) == (code & 0xFFFFFF)) {
             return;
         }
     }
@@ -1445,21 +1445,21 @@ static void ld_key(uint32_t code) {
 
     uint32_t alive = 0;
 
-    for (uint8_t s = 0; s < L->nseq && s < CI_LD_MAX_SEQ; s++) {
-        if ((ld_alive & BIT(s)) && L->seqs[s].len > ld_depth &&
-            (L->seqs[s].codes[ld_depth] & 0xFFFFFF) == (code & 0xFFFFFF)) {
+    for (uint8_t s = 0; s < ldr->nseq && s < CI_LD_MAX_SEQ; s++) {
+        if ((ld_alive & BIT(s)) && ldr->seqs[s].len > ld_depth &&
+            (ldr->seqs[s].codes[ld_depth] & 0xFFFFFF) == (code & 0xFFFFFF)) {
             alive |= BIT(s);
         }
     }
     if (!alive) {
-        ld_end(L->abort_fx, ld_last_pos);
+        ld_end(ldr->abort_fx, ld_last_pos);
         return;
     }
     ld_depth++;
     ld_alive = alive;
-    for (uint8_t s = 0; s < L->nseq; s++) {
-        if ((alive & BIT(s)) && L->seqs[s].len == ld_depth) {
-            ld_end(L->seqs[s].fx, ld_last_pos);
+    for (uint8_t s = 0; s < ldr->nseq; s++) {
+        if ((alive & BIT(s)) && ldr->seqs[s].len == ld_depth) {
+            ld_end(ldr->seqs[s].fx, ld_last_pos);
             return;
         }
     }
