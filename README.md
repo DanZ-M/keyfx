@@ -213,6 +213,7 @@ key position holds which letter or digit:
 - Typing is followed by key position, so it works even though the leader module swallows the keys.
 - A key that is not listed aborts the sequence. List the modifiers you use inside sequences (such as `LSHFT`) so they do not.
 - Replace the example positions with your own.
+- To change layers in the middle of a sequence (for example to reach keypad digits), list your layer keys in `CI_LEADER_IGNORE_POS` (each position followed by a comma). They no longer abort the sequence, and the lit keys follow the new layer.
 
 The timeout comes from the leader behavior's `timeout-ms`, or from `CI_LEADER_TIMEOUT_MS`.
 

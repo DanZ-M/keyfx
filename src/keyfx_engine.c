@@ -212,6 +212,9 @@ struct ci_trigger {
 #ifndef CI_LEADER_KEYS
 #define CI_LEADER_KEYS
 #endif
+#ifndef CI_LEADER_IGNORE_POS
+#define CI_LEADER_IGNORE_POS /* key positions that never abort a sequence (layer keys) */
+#endif
 #ifndef CI_LEADER_DIM_OTHERS
 #define CI_LEADER_DIM_OTHERS 1 /* 1 = turn every other light off while a sequence runs */
 #endif
@@ -297,6 +300,7 @@ struct ci_lkl {
         .n = sizeof((const struct ci_lk[]){__VA_ARGS__}) / sizeof(struct ci_lk),                   \
     },
 static const struct ci_lkl lkeys[] = {CI_LEADER_KEYS{.keys = NULL}};
+static const uint8_t ld_ignore_pos[] = {CI_LEADER_IGNORE_POS 0xFF};
 
 #define CI_LD_CODE(_n, _prop, _i) DT_PROP_BY_IDX(_n, _prop, _i),
 #define CI_LD_SEQ(_n)                                                                              \
@@ -1005,6 +1009,7 @@ static int64_t last_press[CI_POSITIONS];
 
 static void held_poll(void);
 static void ld_resend(void);
+static void ld_relight(void);
 
 static void send_state(void) {
     keyfx_sync_send(((uint32_t)KEYFX_OP_STATE << 24) | ((uint32_t)st_flags << 16) |
@@ -1094,6 +1099,9 @@ static void schedule_state_check(void) {
 }
 
 static int on_state_event(const zmk_event_t *eh) {
+    if (as_zmk_layer_state_changed(eh)) {
+        ld_relight();
+    }
     schedule_state_check();
     return ZMK_EV_EVENT_BUBBLE;
 }
@@ -1487,12 +1495,19 @@ static void ld_fn(struct k_work *work) {
             ld_rebuild();
             ld_send();
             ld_arm_timeout();
+        } else if (e.kind == 2) { /* layers changed: show the keys of the new layer */
+            if (ld_cur >= 0) {
+                ld_rebuild();
+                ld_send();
+            }
         } else if (ld_cur >= 0) {
-            ld_key(e.arg & 0xFF, e.arg >> 8);
+            ld_key(e.arg & 0xFF, ld_code_at(e.arg & 0xFF) & 0xFFFFFF);
         }
     }
 }
-static K_WORK_DEFINE(ld_work, ld_fn);
+/* Handled a few ms late, so ZMK has finished deciding hold-taps and layer changes first. */
+static K_WORK_DELAYABLE_DEFINE(ld_work, ld_fn);
+#define LD_DELAY K_MSEC(8)
 
 /* The key that started the leader (a hold-tap or tap dance) must not count as the first key
  * of the sequence, even if its press is seen just after the leader started. */
@@ -1508,7 +1523,7 @@ static void ld_on_binding(const char *dev, uint32_t position) {
             ld_skip_until = k_uptime_get() + 120;
             ld_armed = true;
             if (k_msgq_put(&ld_q, &e, K_NO_WAIT) == 0) {
-                k_work_submit(&ld_work);
+                k_work_schedule(&ld_work, LD_DELAY);
             }
 #ifdef CI_LEADER_DEBUG_FX
             /* test aid: play this effect whenever a leader behavior start is detected */
@@ -1525,15 +1540,30 @@ static void ld_on_binding(const char *dev, uint32_t position) {
 
 /* Called for every key press (position) while a leader sequence is running. The leader
  * module swallows the keycodes, but ZMK still tells us which key position was pressed. */
+static void ld_relight(void) {
+    if (ld_armed) {
+        struct ld_ev e = {.kind = 2, .arg = 0};
+
+        if (k_msgq_put(&ld_q, &e, K_NO_WAIT) == 0) {
+            k_work_schedule(&ld_work, LD_DELAY);
+        }
+    }
+}
+
 static void ld_on_position(uint8_t pos) {
+    for (size_t i = 0; i < ARRAY_SIZE(ld_ignore_pos) - 1; i++) {
+        if (ld_ignore_pos[i] == pos) {
+            return; /* a layer key: it changes what is lit, it does not end the sequence */
+        }
+    }
     if (ld_armed && pos == ld_skip_pos && k_uptime_get() < ld_skip_until) {
         return;
     }
     if (ld_armed) {
-        struct ld_ev e = {.kind = 1, .arg = ((ld_code_at(pos) & 0xFFFFFF) << 8) | pos};
+        struct ld_ev e = {.kind = 1, .arg = pos};
 
         if (k_msgq_put(&ld_q, &e, K_NO_WAIT) == 0) {
-            k_work_submit(&ld_work);
+            k_work_schedule(&ld_work, LD_DELAY);
         }
     }
 }
