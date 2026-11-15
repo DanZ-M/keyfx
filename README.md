@@ -21,27 +21,35 @@ Add keyfx to the other project's `west.yml` as a project.
 To load the module, add the following entries to remotes and projects in config/west.yml.
 
 manifest:
-remotes: - name: zmkfirmware
-url-base: https://github.com/zmkfirmware - name: DanZ-M
-url-base: https://github.com/DanZ-M
-projects: - name: zmk
-remote: zmkfirmware
-revision: v0.3 # Set to desired ZMK release.
-import: app/west.yml - name: keyfx
-remote: DanZ-M
-revision: v0.3 # Should match ZMK release.
-self:
-path: config
+  remotes:
+    - name: zmkfirmware
+      url-base: https://github.com/zmkfirmware
+    - name: DanZ-M
+      url-base: https://github.com/DanZ-M
+  projects:
+    - name: zmk
+      remote: zmkfirmware
+      revision: v0.3 # Set to desired ZMK release.
+      import: app/west.yml
+    - name: zmk-unicode
+      remote: DanZ-M
+      revision: v0.3 # Should match ZMK release.
+  self:
+    path: config
+
+
 
 Note:
 
 In that keyboard's shield add the devicetree node
-/ {
-chosen {
-zmk,kscan = &kscan0;
-zmk,matrix-...................
-};
 
+
+    / {
+    chosen {
+    zmk,kscan = &kscan0;
+    zmk,matrix-...................
+    };
+    
     behaviors {
     	/* light effects control + left/right sync, see modules/keyfx/include/dt-bindings/zmk/keyfx.h */
     	kfx: keyfx {
@@ -50,7 +58,6 @@ zmk,matrix-...................
     	};
     };
 
-}
 
 In that keyboard's overlay add the two devicetree nodes
 
