@@ -222,7 +222,13 @@ struct ci_trigger {
 #define CI_LEADER_ANIM CI_ANIM_SOLID
 #endif
 #ifndef CI_LEADER_TIMEOUT_MS
-#define CI_LEADER_TIMEOUT_MS 0 /* 0 = use the leader behavior's own timeout-ms, if any */
+/* Lights go out after this long without a listed key, unless the leader behavior has its own
+ * timeout-ms. 0 = never. */
+#define CI_LEADER_TIMEOUT_MS 15000
+#endif
+#ifndef CI_LEADER_STRICT
+/* 0 = keys that are not in CI_LEADER_KEYS are ignored; 1 = they abort the sequence */
+#define CI_LEADER_STRICT 0
 #endif
 
 #ifndef CI_ACTIONS
@@ -1449,6 +1455,9 @@ static void ld_timeout_fn(struct k_work *work) {
 static void ld_key(uint8_t pos, uint32_t code) {
     const struct ci_leader *ldr = &leaders[ld_cur];
 
+    if (!code && !CI_LEADER_STRICT) {
+        return; /* not a key we know: leave it to the leader module, keep the lights */
+    }
     ld_last_pos = pos;
     if (code && (code >> 16) == 0x07 && (code & 0xFFFF) >= 0xE0 && (code & 0xFFFF) <= 0xE7) {
         return; /* a bare modifier never ends or advances a sequence */
