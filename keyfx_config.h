@@ -229,6 +229,10 @@
 		CI_LKEY(N1, 1), CI_LKEY(N2, 2), CI_LKEY(N3, 3), CI_LKEY(N4, 4), CI_LKEY(N5, 5))
 
 /* #define CI_LEADER_DIM_OTHERS 0 */          /* 1 (default): every other light goes off during a sequence */
+/* #define CI_LEADER_DEBUG_FX FX_KEY_RIPPLE */ /* test aid: plays this effect whenever a leader start is detected */
+/* Positions of your layer keys (momentary or toggle). Pressing one during a sequence does not
+ * abort it, and the lit keys switch to the new layer (e.g. letters -> keypad). */
+/* #define CI_LEADER_IGNORE_POS 41, */ /* each number followed by a comma; hold-taps that hold a layer count */
 /* #define CI_LEADER_ANIM CI_ANIM_BREATHE */  /* solid (default), breathe or blink */
 /* #define CI_LEADER_BRIGHTNESS_PERCENT 80 */
 /* #define CI_LEADER_TIMEOUT_MS 5000 */       /* only if your leader has no timeout-ms */
