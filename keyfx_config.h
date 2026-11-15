@@ -118,6 +118,9 @@
 	/* holding key 37 for more than 300 ms lights keys 3 and 37 */ \
 	CI_HELD_RULE(37, 300, CI_ORANGE, CI_ANIM_BREATHE, CI_ALWAYS, 3, 37)
 	/* More examples - uncomment (keep the trailing backslashes) and adjust:
+	CI_RULEX(CI_LAYER, 1, CI_RED, CI_ANIM_BREATHE, CI_ALWAYS, \
+		CI_OPTS(.color2 = CI_BLUE, .period_ms = 3000, .fade_in_ms = 400, .fade_out_ms = 600, .brightness = 40), \
+		2, 3, 4, 14, 15, 16) \
 	CI_RULE(CI_LAYER, 1, CI_BLUE,  CI_ANIM_SOLID,   CI_ALWAYS, 30, 31, 32, 33, 34, 35) \
 	CI_RULE(CI_LAYER, 2, CI_GREEN, CI_ANIM_SOLID,   CI_ALWAYS, 37, 38, 39) \
 	CI_RULE(CI_MOD, CI_MOD_GUI,   CI_YELLOW, CI_ANIM_BREATHE, CI_ALWAYS, 36) \
@@ -126,6 +129,14 @@
 	*/
 
 /* ---------------------------------------------------------------------------
+ * Per-rule settings: use CI_RULEX instead of CI_RULE and add CI_OPTS(...) before the keys:
+ *   .brightness  percent for this rule only          .period_ms   breathe / blink period
+ *   .fade_in_ms  time to come up                     .fade_out_ms time to fade away
+ *   .color2, .color3  more colours: the keys, in the order listed, blend from colour to
+ *                     colour2 (to colour3). CI_RAINBOW as colour gives a moving rainbow.
+ *   CI_RULEX(CI_CAPS_ON, 0, CI_RED, CI_ANIM_SOLID, CI_ALWAYS,
+ *            CI_OPTS(.color2 = CI_ORANGE, .fade_in_ms = 300), 36, 19)
+ *
  * 4. Effects
  *
  *   CI_EFFECT(NAME, type, colour, duration_ms, arg)
@@ -235,7 +246,8 @@
 /* #define CI_LEADER_IGNORE_POS 41, */ /* each number followed by a comma; hold-taps that hold a layer count */
 /* #define CI_LEADER_ANIM CI_ANIM_BREATHE */  /* solid (default), breathe or blink */
 /* #define CI_LEADER_BRIGHTNESS_PERCENT 80 */
-/* #define CI_LEADER_TIMEOUT_MS 5000 */       /* only if your leader has no timeout-ms */
+/* #define CI_LEADER_TIMEOUT_MS 15000 */      /* lights go out after this long (default 15000; 0 = never) */
+/* #define CI_LEADER_STRICT 1 */              /* 1: a key not listed in CI_LEADER_KEYS aborts the sequence */
 
 /* ---------------------------------------------------------------------------
  * 8. Triggers by key position (optional, they only watch key presses)

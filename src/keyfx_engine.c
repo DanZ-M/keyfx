@@ -118,6 +118,12 @@ struct ci_rule {
     uint8_t n;
     uint8_t hold_pos; /* CI_HELD: the key that has to be held       */
     uint16_t hold_ms; /* CI_HELD: for how long before the lights come on */
+    /* optional per-rule settings (0 = use the general setting); see CI_RULEX */
+    uint8_t brightness;  /* percent                                            */
+    uint16_t period_ms;  /* breathe / blink period                             */
+    uint16_t fade_in_ms; /* time to come up to full brightness                 */
+    uint16_t fade_out_ms; /* time to fade away when the condition ends         */
+    uint32_t color2, color3; /* more colours: a gradient across the listed keys */
 };
 
 struct ci_fx_def {
@@ -149,6 +155,16 @@ struct ci_trigger {
         .src = CI_HELD, .hold_pos = (_hold_pos), .hold_ms = (_delay_ms), .anim = (_anim),          \
         .when = (_when), .color = (_color), .pos = (const uint8_t[]){__VA_ARGS__},                 \
         .n = sizeof((const uint8_t[]){__VA_ARGS__}),                                               \
+    },
+
+/* CI_RULE with extra settings:
+ *   CI_RULEX(src, arg, colour, anim, layer, CI_OPTS(.brightness = 40, .fade_in_ms = 300), keys...)
+ * options: .brightness (%), .period_ms, .fade_in_ms, .fade_out_ms, .color2, .color3 */
+#define CI_OPTS(...) __VA_ARGS__,
+#define CI_RULEX(_src, _arg, _color, _anim, _when, _opts, ...)                                     \
+    {                                                                                              \
+        .src = (_src), .arg = (_arg), .anim = (_anim), .when = (_when), .color = (_color), _opts   \
+        .pos = (const uint8_t[]){__VA_ARGS__}, .n = sizeof((const uint8_t[]){__VA_ARGS__}),        \
     },
 
 #define CI_ON_COMBO(_fx, _win, ...)                                                                \
@@ -530,20 +546,27 @@ static struct led_rgb rgb_from(uint32_t c, uint32_t level255, uint32_t pct) {
     return px;
 }
 
-static uint8_t anim_factor(uint8_t anim, int64_t now) {
+static uint8_t anim_factor_p(uint8_t anim, int64_t now, uint32_t period) {
+    uint32_t breathe_ms = period ? period : CI_BREATHE_MS;
+    uint32_t blink_ms = period ? period : CI_BLINK_MS;
+
     switch (anim) {
     case CI_ANIM_BREATHE: {
-        uint32_t p = now % CI_BREATHE_MS;
-        uint32_t half = CI_BREATHE_MS / 2;
-        uint32_t v = p < half ? (p * 255) / half : ((CI_BREATHE_MS - p) * 255) / half;
+        uint32_t p = now % breathe_ms;
+        uint32_t half = breathe_ms / 2;
+        uint32_t v = p < half ? (p * 255) / half : ((breathe_ms - p) * 255) / half;
         v = (v * v) / 255; /* ease */
         return 15 + (v * 240) / 255;
     }
     case CI_ANIM_BLINK:
-        return (now % CI_BLINK_MS) < (CI_BLINK_MS / 2) ? 255 : 0;
+        return (now % blink_ms) < (blink_ms / 2) ? 255 : 0;
     default:
         return 255;
     }
+}
+
+static uint8_t anim_factor(uint8_t anim, int64_t now) {
+    return anim_factor_p(anim, now, 0);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -735,7 +758,37 @@ static bool rule_active(const struct ci_rule *r, int held_idx) {
     }
 }
 
-/* Paints indicator rules onto out_frame; returns true if any lit rule is animated. */
+/* colour of the i-th of n keys of a rule: one colour, a gradient through up to three colours,
+ * or a rainbow along the keys */
+static uint32_t rule_color(const struct ci_rule *r, int i, int n, int64_t now) {
+    if (r->color == CI_RAINBOW) {
+        struct led_rgb h = hue_rgb((uint16_t)((i * 360 / MAX(n, 1) + now / 12) % 360));
+
+        return ((uint32_t)h.r << 16) | ((uint32_t)h.g << 8) | h.b;
+    }
+    if (!r->color2) {
+        return r->color;
+    }
+    uint32_t c[3] = {r->color, r->color2, r->color3};
+    int nc = r->color3 ? 3 : 2;
+    uint32_t t = n > 1 ? ((uint32_t)i * 256 * (nc - 1)) / (n - 1) : 0;
+    int seg = MIN((int)(t >> 8), nc - 2);
+    uint32_t f = t - ((uint32_t)seg << 8);
+    uint32_t a = c[seg], b = c[seg + 1], out = 0;
+
+    f = MIN(f, 256u);
+    for (int sh = 16; sh >= 0; sh -= 8) {
+        uint32_t x = (a >> sh) & 0xFF, y = (b >> sh) & 0xFF;
+
+        out |= ((x * (256 - f) + y * f) >> 8) << sh;
+    }
+    return out;
+}
+
+static uint8_t rule_level[ARRAY_SIZE(rules)];
+static int64_t rule_t[ARRAY_SIZE(rules)];
+
+/* Paints indicator rules onto out_frame; returns true while anything animates or fades. */
 static bool paint_rules(int64_t now, bool *any_lit) {
     bool animated = false;
 
@@ -745,24 +798,45 @@ static bool paint_rules(int64_t now, bool *any_lit) {
     }
 
     int held_idx = -1;
+    size_t ri = 0;
 
-    for (const struct ci_rule *r = rules; r->src != CI_END; r++) {
+    for (const struct ci_rule *r = rules; r->src != CI_END; r++, ri++) {
         if (r->src == CI_HELD) {
             held_idx++;
         }
-        if (!rule_active(r, held_idx)) {
+        bool on = rule_active(r, held_idx);
+        uint8_t target = on ? 255 : 0;
+        /* frames are only drawn while something moves, so a long gap means "one frame ago" */
+        int64_t dt = rule_t[ri] ? MIN(now - rule_t[ri], (int64_t)(CI_FRAME_MS * 2)) : CI_FRAME_MS;
+
+        rule_t[ri] = now;
+        if (rule_level[ri] != target) {
+            uint16_t ms = on ? r->fade_in_ms : r->fade_out_ms;
+
+            if (!ms) {
+                rule_level[ri] = target;
+            } else {
+                int32_t step = (int32_t)(dt * 255 / ms) + 1;
+
+                rule_level[ri] = on ? MIN(255, rule_level[ri] + step)
+                                    : (rule_level[ri] > step ? rule_level[ri] - step : 0);
+                animated = true;
+            }
+        }
+        if (!rule_level[ri]) {
             continue;
         }
-        uint8_t factor = anim_factor(r->anim, now);
+        uint8_t factor = ((uint32_t)anim_factor_p(r->anim, now, r->period_ms) * rule_level[ri]) / 255;
+        uint8_t pct = r->brightness ? r->brightness : CI_BRIGHTNESS_PERCENT;
 
-        if (r->anim != CI_ANIM_SOLID) {
+        if (r->anim != CI_ANIM_SOLID || r->color == CI_RAINBOW) {
             animated = true;
         }
         for (uint8_t i = 0; i < r->n; i++) {
             int led = pos_led(r->pos[i]);
 
             if (led >= 0) {
-                out_frame[led] = rgb_from(r->color, factor, CI_BRIGHTNESS_PERCENT);
+                out_frame[led] = rgb_from(rule_color(r, i, r->n, now), factor, pct);
                 *any_lit = true;
             }
         }

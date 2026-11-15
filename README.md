@@ -150,6 +150,25 @@ Sources: `CI_CAPS_ON`, `CI_NUM_OFF`, `CI_NUM_ON`, `CI_LAYER`, `CI_MOD`, `CI_CAPS
 Animations: `CI_ANIM_SOLID`, `CI_ANIM_BREATHE`, `CI_ANIM_BLINK`.
 `layer` limits the rule to when that layer is active; `CI_ALWAYS` means no limit.
 
+### Per-rule settings, fades and gradients
+
+`CI_RULEX` is `CI_RULE` plus options, each only for that rule:
+
+```
+CI_RULEX(CI_LAYER, 1, CI_RED, CI_ANIM_BREATHE, CI_ALWAYS,
+         CI_OPTS(.color2 = CI_BLUE, .period_ms = 3000, .fade_in_ms = 400, .fade_out_ms = 600, .brightness = 40),
+         2, 3, 4, 14, 15, 16)
+```
+
+| Option | Meaning |
+|---|---|
+| `.brightness` | percent, for this rule only |
+| `.period_ms` | length of one breathe or blink |
+| `.fade_in_ms`, `.fade_out_ms` | time to come up and to fade away |
+| `.color2`, `.color3` | more colours: the listed keys blend from `colour` to `.color2` (to `.color3`), in the order you list them |
+
+Use `CI_RAINBOW` as the colour for a moving rainbow along the keys. Options you leave out use the general settings.
+
 ### Held-key lights
 
 ```
@@ -211,11 +230,11 @@ key position holds which letter or digit:
 
 - A key is looked up in the highest active layer that lists its position, so digits light only while their layer is active.
 - Typing is followed by key position, so it works even though the leader module swallows the keys.
-- A key that is not listed aborts the sequence. List the modifiers you use inside sequences (such as `LSHFT`) so they do not.
+- Only listed keys are followed. A listed key that does not fit the sequence aborts the lights (list `ESC` to have a way to cancel). A key that is not listed is ignored, and the lights stay on, so layer keys and modifiers cannot break the effect. If such a key ends the sequence in the leader module itself, the lights go out at the timeout. Set `CI_LEADER_STRICT 1` if you prefer unlisted keys to abort.
 - Replace the example positions with your own.
 - To change layers in the middle of a sequence (for example to reach keypad digits), list your layer keys in `CI_LEADER_IGNORE_POS` (each position followed by a comma). They no longer abort the sequence, and the lit keys follow the new layer.
 
-The timeout comes from the leader behavior's `timeout-ms`, or from `CI_LEADER_TIMEOUT_MS`.
+The timeout comes from the leader behavior's `timeout-ms`, or from `CI_LEADER_TIMEOUT_MS` (15 s by default).
 
 ---
 
