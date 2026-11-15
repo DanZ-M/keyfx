@@ -111,7 +111,12 @@
 	CI_RULE(CI_MOD, 	CI_MOD_CTRL, CI_CYAN,   CI_FX_FLASH,   CI_ALWAYS, 24, 19) \
 	CI_RULE(CI_MOD, 	CI_MOD_SHIFT, CI_PINK,   CI_FX_FLASH,   CI_ALWAYS, 23) \
 	/* Splash mode indicator: key 11 (the toggle on the FUNC layer) */ \
-	CI_RULE(CI_SPLASH_ON, 0, CI_PINK, CI_ANIM_SOLID, 3, 11)
+	CI_RULE(CI_SPLASH_ON, 0, CI_PINK, CI_ANIM_SOLID, 3, 11) \
+	/* HELD KEYS: CI_HELD_RULE(held key, after how many ms, colour, animation, layer, lit keys...) */ \
+	/* holding key 23 (no delay) lights key 11 - not key 23 itself */ \
+	CI_HELD_RULE(23, 0,   CI_CYAN,   CI_ANIM_SOLID, CI_ALWAYS, 11) \
+	/* holding key 37 for more than 300 ms lights keys 3 and 37 */ \
+	CI_HELD_RULE(37, 300, CI_ORANGE, CI_ANIM_BREATHE, CI_ALWAYS, 3, 37)
 	/* More examples - uncomment (keep the trailing backslashes) and adjust:
 	CI_RULE(CI_LAYER, 1, CI_BLUE,  CI_ANIM_SOLID,   CI_ALWAYS, 30, 31, 32, 33, 34, 35) \
 	CI_RULE(CI_LAYER, 2, CI_GREEN, CI_ANIM_SOLID,   CI_ALWAYS, 37, 38, 39) \
@@ -184,8 +189,41 @@
 	CI_ON_BINDING(UNLOCK, kp, LC(LA(DEL)), 0) \
 	*/
 
+/* ===========================================================================
+ * 7. Leader key lights (needs the urob zmk-leader-key module)
+ *
+ * When the leader behavior starts, every key used by its sequences lights up. Type a key
+ * and only the sequences that still match stay lit; the key you typed goes dark. If you
+ * type something that matches nothing, or wait too long, the lights go out; if you finish
+ * a sequence the "done" effect plays.
+ * The sequences are read from your keymap, nothing is typed twice.
+ *
+ *   CI_LEADER(label of the leader behavior, default colour, effect when done, effect when
+ *             aborted)       use FX_NONE for "no effect"
+ *   CI_LEADER_SEQ(sequence node name, colour, effect when this one is done)
+ *             optional, gives one sequence its own colour (FX_NONE = leader's default effect)
+ *
+ * Keys are found through your layers as they are right now, so digits only light on the
+ * layer where they are typed. If your base layer also has number keys, set
+ * CI_LEADER_NUM_LAYER to your number layer so digits only light there.
+ * Leave both lists empty to turn the feature off. Up to 15 colours.
+ * =========================================================================== */
+#define CI_LEADERS \
+	CI_LEADER(leader, CI_WHITE, FX_NONE, FX_NONE)
+
+#define CI_LEADER_SEQS \
+	CI_LEADER_SEQ(tick, CI_GREEN,  FX_NONE) \
+	CI_LEADER_SEQ(usb,  CI_BLUE,   FX_NONE) \
+	CI_LEADER_SEQ(ble,  CI_CYAN,   FX_NONE) \
+	CI_LEADER_SEQ(btc,  CI_RED,    FX_NONE)
+
+/* #define CI_LEADER_NUM_LAYER 3 */           /* layer where the digit keys live */
+/* #define CI_LEADER_ANIM CI_ANIM_BREATHE */  /* solid (default), breathe or blink */
+/* #define CI_LEADER_BRIGHTNESS_PERCENT 80 */
+/* #define CI_LEADER_TIMEOUT_MS 5000 */       /* only if your leader has no timeout-ms */
+
 /* ---------------------------------------------------------------------------
- * 7. Triggers by key position (optional, they only watch key presses)
+ * 8. Triggers by key position (optional, they only watch key presses)
  *
  *   CI_ON_COMBO(NAME, window_ms, positions...)   keys pressed together
  *   CI_ON_TAPS(NAME, count, window_ms, position) key tapped <count> times in a row

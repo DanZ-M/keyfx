@@ -63,6 +63,7 @@ enum ci_source {
     CI_BT_CONNECTED, /* active Bluetooth profile is <arg> and connected  */
     CI_BT_SEARCHING, /* active Bluetooth profile is <arg>, not connected */
     CI_SPLASH_ON,    /* keystroke splash mode is on                      */
+    CI_HELD,         /* key <hold_pos> has been held for <hold_ms>       */
 };
 
 enum ci_anim { CI_ANIM_SOLID = 0, CI_ANIM_BREATHE, CI_ANIM_BLINK };
@@ -115,6 +116,8 @@ struct ci_rule {
     uint32_t color;
     const uint8_t *pos;
     uint8_t n;
+    uint8_t hold_pos; /* CI_HELD: the key that has to be held       */
+    uint16_t hold_ms; /* CI_HELD: for how long before the lights come on */
 };
 
 struct ci_fx_def {
@@ -137,6 +140,15 @@ struct ci_trigger {
     {                                                                                              \
         .src = (_src), .arg = (_arg), .anim = (_anim), .when = (_when), .color = (_color),         \
         .pos = (const uint8_t[]){__VA_ARGS__}, .n = sizeof((const uint8_t[]){__VA_ARGS__}),        \
+    },
+
+/* Lights up <keys...> while position <hold_pos> is held down for at least <delay_ms>.
+ * The held key itself only lights if it is also in the list. */
+#define CI_HELD_RULE(_hold_pos, _delay_ms, _color, _anim, _when, ...)                              \
+    {                                                                                              \
+        .src = CI_HELD, .hold_pos = (_hold_pos), .hold_ms = (_delay_ms), .anim = (_anim),          \
+        .when = (_when), .color = (_color), .pos = (const uint8_t[]){__VA_ARGS__},                 \
+        .n = sizeof((const uint8_t[]){__VA_ARGS__}),                                               \
     },
 
 #define CI_ON_COMBO(_fx, _win, ...)                                                                \
@@ -189,6 +201,24 @@ struct ci_trigger {
 
 #include "keyfx_config.h"
 
+#define FX_NONE 0xFF /* "no effect" in the leader settings */
+
+#ifndef CI_LEADERS
+#define CI_LEADERS
+#endif
+#ifndef CI_LEADER_SEQS
+#define CI_LEADER_SEQS
+#endif
+#ifndef CI_LEADER_NUM_LAYER
+#define CI_LEADER_NUM_LAYER 0xFF /* digits only light while this layer is active */
+#endif
+#ifndef CI_LEADER_ANIM
+#define CI_LEADER_ANIM CI_ANIM_SOLID
+#endif
+#ifndef CI_LEADER_TIMEOUT_MS
+#define CI_LEADER_TIMEOUT_MS 0 /* 0 = use the leader behavior's own timeout-ms, if any */
+#endif
+
 #ifndef CI_ACTIONS
 #define CI_ACTIONS
 #endif
@@ -218,6 +248,76 @@ static const struct ci_trigger triggers[] = {CI_TRIGGERS{.kind = CI_T_END}};
 static const uint8_t splash_styles[] = {CI_SPLASH_STYLES};
 #define CI_SPLASH_STYLE_COUNT ARRAY_SIZE(splash_styles)
 
+/* ---- leader key lighting: sequences are read from the keymap at build time ---- */
+
+#define CI_LD_MAX_SEQ 32
+#define CI_LD_MAX_PAL 15
+
+struct ci_seq {
+    const char *name;
+    uint8_t len;
+    const uint32_t *codes;
+    uint8_t pal; /* palette entry, filled in at start-up */
+    uint8_t fx;  /* effect when this sequence completes */
+};
+
+struct ci_leader {
+    const char *dev;
+    struct ci_seq *seqs;
+    uint8_t nseq;
+    uint8_t done_fx, abort_fx;
+    const uint32_t *ignore;
+    uint8_t n_ignore;
+    uint16_t timeout_ms;
+};
+
+struct ci_seqcfg {
+    const char *name;
+    uint32_t color;
+    uint8_t fx;
+};
+
+#define CI_LD_CODE(_n, _prop, _i) DT_PROP_BY_IDX(_n, _prop, _i),
+#define CI_LD_SEQ(_n)                                                                              \
+    {                                                                                              \
+        .name = DT_NODE_FULL_NAME(_n), .len = DT_PROP_LEN(_n, sequence),                           \
+        .codes = (const uint32_t[]){DT_FOREACH_PROP_ELEM(_n, sequence, CI_LD_CODE)},               \
+    },
+#define CI_LD_IGN(_n)                                                                              \
+    COND_CODE_1(DT_NODE_HAS_PROP(_n, ignore_keys),                                                 \
+                ((const uint32_t[]){DT_FOREACH_PROP_ELEM(_n, ignore_keys, CI_LD_CODE) 0}),         \
+                ((const uint32_t[]){0}))
+
+/* pass 1: one array of sequences per leader behavior */
+#define CI_LEADER(_label, _color, _done, _abort)                                                   \
+    static struct ci_seq lseq_##_label[] = {                                                       \
+        DT_FOREACH_CHILD_STATUS_OKAY(DT_NODELABEL(_label), CI_LD_SEQ)};
+CI_LEADERS
+
+/* pass 2: the table of leaders */
+#undef CI_LEADER
+#define CI_LEADER(_label, _color, _done, _abort)                                                   \
+    {                                                                                              \
+        .dev = DEVICE_DT_NAME(DT_NODELABEL(_label)), .seqs = lseq_##_label,                        \
+        .nseq = ARRAY_SIZE(lseq_##_label), .done_fx = (_done), .abort_fx = (_abort),               \
+        .ignore = CI_LD_IGN(DT_NODELABEL(_label)),                                                 \
+        .n_ignore = DT_PROP_LEN_OR(DT_NODELABEL(_label), ignore_keys, 0),                          \
+        .timeout_ms = DT_PROP_OR(DT_NODELABEL(_label), timeout_ms, 0),                             \
+    },
+static struct ci_leader leaders[] = {CI_LEADERS{.dev = NULL}};
+#define CI_LEADER_COUNT (ARRAY_SIZE(leaders) - 1)
+
+#define CI_LEADER_SEQ(_name, _color, _fx) {#_name, (_color), (_fx)},
+static const struct ci_seqcfg seqcfgs[] = {CI_LEADER_SEQS{NULL, 0, 0}};
+#define CI_SEQCFG_COUNT (ARRAY_SIZE(seqcfgs) - 1)
+
+/* palette: entry i+1 of the lit-key map -> colour. Leader defaults first, then per sequence. */
+#undef CI_LEADER
+#define CI_LEADER(_label, _color, _done, _abort) (_color),
+#undef CI_LEADER_SEQ
+#define CI_LEADER_SEQ(_name, _color, _fx) (_color),
+static const uint32_t ld_palette[] = {CI_LEADERS CI_LEADER_SEQS 0};
+
 /* ------------------------------------------------------------------------- */
 /* Tunables with defaults                                                    */
 /* ------------------------------------------------------------------------- */
@@ -227,6 +327,9 @@ static const uint8_t splash_styles[] = {CI_SPLASH_STYLES};
 #endif
 #ifndef CI_BLINK_MS
 #define CI_BLINK_MS 700
+#endif
+#ifndef CI_LEADER_BRIGHTNESS_PERCENT
+#define CI_LEADER_BRIGHTNESS_PERCENT CI_BRIGHTNESS_PERCENT
 #endif
 #ifndef CI_FRAME_MS
 #define CI_FRAME_MS 25
@@ -298,7 +401,11 @@ static uint8_t hid_ind;
 static uint8_t st_layers;
 static uint8_t st_mods;
 static uint8_t st_flags = (CI_SPLASH_DEFAULT_ON ? ST_SPLASH_ON : 0) | ST_IND_ON;
+static uint32_t st_held; /* bit per CI_HELD rule, in order of appearance */
 static uint8_t splash_idx;
+static uint8_t ld_pal[CI_POSITIONS]; /* leader lights: palette entry per key position, 0 = off */
+static bool ld_any;
+static int64_t ld_stamp; /* peripheral: when the central last told us about the leader */
 
 static void kick(void);
 
@@ -564,7 +671,7 @@ static bool paint_effects(int64_t now) {
 /* Indicator rules                                                           */
 /* ------------------------------------------------------------------------- */
 
-static bool rule_active(const struct ci_rule *r) {
+static bool rule_active(const struct ci_rule *r, int held_idx) {
     uint8_t profile = (st_flags >> ST_PROFILE_SHIFT) & 0x7;
 
     if (r->when != CI_ALWAYS && !(st_layers & BIT(r->when & 7))) {
@@ -590,6 +697,8 @@ static bool rule_active(const struct ci_rule *r) {
         return profile == r->arg && !(st_flags & ST_BT_CONNECTED);
     case CI_SPLASH_ON:
         return st_flags & ST_SPLASH_ON;
+    case CI_HELD:
+        return held_idx < 24 && (st_held & BIT(held_idx));
     default:
         return false;
     }
@@ -604,8 +713,13 @@ static bool paint_rules(int64_t now, bool *any_lit) {
         return false;
     }
 
+    int held_idx = -1;
+
     for (const struct ci_rule *r = rules; r->src != CI_END; r++) {
-        if (!rule_active(r)) {
+        if (r->src == CI_HELD) {
+            held_idx++;
+        }
+        if (!rule_active(r, held_idx)) {
             continue;
         }
         uint8_t factor = anim_factor(r->anim, now);
@@ -625,6 +739,31 @@ static bool paint_rules(int64_t now, bool *any_lit) {
     return animated;
 }
 
+/* Leader key lights (what to light was decided by the central half). */
+static bool paint_leader(int64_t now) {
+    if (!ld_any) {
+        return false;
+    }
+#if !CI_IS_CENTRAL
+    if (now - ld_stamp > 6000) { /* the central went quiet: do not stay lit forever */
+        memset(ld_pal, 0, sizeof(ld_pal));
+        ld_any = false;
+        return false;
+    }
+#endif
+    uint8_t factor = anim_factor(CI_LEADER_ANIM, now);
+
+    for (uint8_t p = 0; p < CI_POSITIONS; p++) {
+        int led = pos_led(p);
+
+        if (led >= 0 && ld_pal[p] && ld_pal[p] <= ARRAY_SIZE(ld_palette) - 1) {
+            out_frame[led] = rgb_from(ld_palette[ld_pal[p] - 1], factor,
+                                      CI_LEADER_BRIGHTNESS_PERCENT);
+        }
+    }
+    return true;
+}
+
 /* ------------------------------------------------------------------------- */
 /* Frame output                                                              */
 /* ------------------------------------------------------------------------- */
@@ -636,6 +775,7 @@ static bool push_frame(int *rc_out) {
 
     memcpy(out_frame, last_frame, sizeof(out_frame));
     bool animated = paint_rules(now, &any_lit);
+    animated |= paint_leader(now);
     bool fx_running = paint_effects(now);
 
     *rc_out = led_strip_update_rgb(ov_cfg.strip, out_frame, CI_N);
@@ -704,6 +844,31 @@ static const struct led_strip_driver_api ov_api = {
 /* Commands (from keys, or from the central)                                 */
 /* ------------------------------------------------------------------------- */
 
+#if !CI_IS_CENTRAL
+/* The central sends the right half's lit keys as 4-bit palette entries, 14 per message,
+ * in the order the right-half keys appear in CI_KEYS. */
+static void ld_apply(int base, uint32_t lo24, uint32_t hi32) {
+    int r = 0;
+
+    for (uint8_t p = 0; p < CI_POSITIONS; p++) {
+        if (geo_keys[p].half != CI_RIGHT) {
+            continue;
+        }
+        int n = r - base;
+
+        if (n >= 0 && n < 14) {
+            ld_pal[p] = n < 6 ? (lo24 >> (4 * n)) & 0xF : (hi32 >> (4 * (n - 6))) & 0xF;
+        }
+        r++;
+    }
+    ld_any = false;
+    for (uint8_t p = 0; p < CI_POSITIONS; p++) {
+        ld_any |= ld_pal[p] != 0;
+    }
+    ld_stamp = k_uptime_get();
+}
+#endif
+
 void keyfx_engine_command(uint32_t p1, uint32_t p2) {
     uint8_t op = p1 >> 24;
 
@@ -744,6 +909,10 @@ void keyfx_engine_command(uint32_t p1, uint32_t p2) {
         st_mods = (p1 >> 8) & 0xFF;
         st_flags = (p1 >> 16) & 0xFF;
         hid_ind = p2 & 0xFF;
+        st_held = p2 >> 8;
+        kick();
+    } else if (op == KEYFX_OP_LEADER_A || op == KEYFX_OP_LEADER_B) {
+        ld_apply(op == KEYFX_OP_LEADER_B ? 14 : 0, p1 & 0xFFFFFF, p2);
         kick();
     } else if (op == KEYFX_OP_FX) {
         k_mutex_lock(&ov_lock, K_FOREVER);
@@ -803,10 +972,16 @@ static bool caps_word_active(void) {
 #endif
 }
 
+static bool key_down[CI_POSITIONS];
+static int64_t last_press[CI_POSITIONS];
+
+static void held_poll(void);
+static void ld_resend(void);
+
 static void send_state(void) {
     keyfx_sync_send(((uint32_t)KEYFX_OP_STATE << 24) | ((uint32_t)st_flags << 16) |
                        ((uint32_t)st_mods << 8) | st_layers,
-                   hid_ind);
+                   (st_held << 8) | hid_ind);
 }
 
 static void check_state(bool force) {
@@ -830,7 +1005,30 @@ static void check_state(bool force) {
     }
 #endif
 
-    bool changed = layers != st_layers || mods != st_mods || flags != st_flags;
+    uint32_t held = 0;
+    int hi = 0;
+    bool waiting = false;
+    int64_t now = k_uptime_get();
+
+    for (const struct ci_rule *r = rules; r->src != CI_END; r++) {
+        if (r->src != CI_HELD) {
+            continue;
+        }
+        if (hi < 24 && r->hold_pos < CI_POSITIONS && key_down[r->hold_pos]) {
+            if (now - last_press[r->hold_pos] >= r->hold_ms) {
+                held |= BIT(hi);
+            } else {
+                waiting = true;
+            }
+        }
+        hi++;
+    }
+    if (waiting) {
+        held_poll();
+    }
+
+    bool changed = layers != st_layers || mods != st_mods || flags != st_flags || held != st_held;
+    st_held = held;
 
     st_layers = layers;
     st_mods = mods;
@@ -849,12 +1047,17 @@ static void state_fn(struct k_work *work) {
 }
 static K_WORK_DELAYABLE_DEFINE(state_work, state_fn);
 
+static void held_poll(void) {
+    k_work_reschedule(&state_work, K_MSEC(40));
+}
+
 static void beat_fn(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(beat_work, beat_fn);
 
 static void beat_fn(struct k_work *work) {
     /* periodic resend heals a peripheral that reconnected or rebooted */
     check_state(true);
+    ld_resend();
     k_work_reschedule(&beat_work, K_SECONDS(2));
 }
 
@@ -877,8 +1080,6 @@ ZMK_SUBSCRIPTION(aaa_keyfx_state, zmk_endpoint_changed);
 
 /* ---- central: key presses -> triggers and splash ---- */
 
-static bool key_down[CI_POSITIONS];
-static int64_t last_press[CI_POSITIONS];
 static int64_t trig_last[CI_TRIGGER_COUNT + 1];
 static uint8_t trig_count[CI_TRIGGER_COUNT + 1];
 
@@ -911,6 +1112,8 @@ static void act_fn(struct k_work *work) {
 }
 static K_WORK_DEFINE(act_work, act_fn);
 
+static void ld_on_binding(const char *dev);
+
 void keyfx_on_binding(const struct zmk_behavior_binding *b,
                      const struct zmk_behavior_binding_event *ev) {
     static const char kfx_name[] = DEVICE_DT_NAME(DT_NODELABEL(kfx));
@@ -918,6 +1121,8 @@ void keyfx_on_binding(const struct zmk_behavior_binding *b,
     if (!b->behavior_dev || strcmp(b->behavior_dev, kfx_name) == 0) {
         return; /* our own sync messages */
     }
+    ld_on_binding(b->behavior_dev);
+
     bool virtual_pos = ev->position >= CI_POSITIONS;
 
     for (const struct ci_action *a = actions; a->kind != CI_A_END; a++) {
@@ -964,6 +1169,13 @@ static void handle_press(uint8_t p, int64_t now) {
 
     last_press[p] = now;
     key_down[p] = true;
+
+    for (const struct ci_rule *r = rules; r->src != CI_END; r++) {
+        if (r->src == CI_HELD && r->hold_pos == p) {
+            held_poll();
+            break;
+        }
+    }
 
     for (size_t i = 0; i < CI_TRIGGER_COUNT; i++) {
         const struct ci_trigger *t = &triggers[i];
@@ -1035,7 +1247,279 @@ static int on_position(const zmk_event_t *eh) {
 ZMK_LISTENER(aaa_keyfx_pos, on_position);
 ZMK_SUBSCRIPTION(aaa_keyfx_pos, zmk_position_state_changed);
 
+/* ---- central: leader key lighting ---- */
+
+#define LD_TRANS_NAME DEVICE_DT_NAME(DT_NODELABEL(trans))
+
+struct ld_ev {
+    uint8_t kind; /* 0 = a leader behavior started (arg = leader index), 1 = key typed */
+    uint32_t arg;
+};
+K_MSGQ_DEFINE(ld_q, sizeof(struct ld_ev), 16, 4);
+
+static volatile bool ld_armed;
+static int8_t ld_cur = -1;
+static uint8_t ld_depth;
+static uint32_t ld_alive;
+static uint8_t ld_last_pos;
+
+static bool name_eq(const char *a, const char *b) {
+    for (; *a && *b; a++, b++) {
+        char x = (*a == '-') ? '_' : (*a | 0x20);
+        char y = (*b == '-') ? '_' : (*b | 0x20);
+
+        if (x != y) {
+            return false;
+        }
+    }
+    return *a == *b;
+}
+
+static void ld_init(void) {
+    for (size_t k = 0; k < CI_LEADER_COUNT; k++) {
+        for (uint8_t i = 0; i < leaders[k].nseq; i++) {
+            struct ci_seq *q = &leaders[k].seqs[i];
+
+            q->pal = MIN(k + 1, CI_LD_MAX_PAL);
+            q->fx = leaders[k].done_fx;
+            for (size_t j = 0; j < CI_SEQCFG_COUNT; j++) {
+                if (name_eq(seqcfgs[j].name, q->name)) {
+                    size_t pal = CI_LEADER_COUNT + j + 1;
+
+                    q->pal = pal <= CI_LD_MAX_PAL ? pal : q->pal;
+                    if (seqcfgs[j].fx != FX_NONE) {
+                        q->fx = seqcfgs[j].fx;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* The binding that is really in effect at a key position (highest active layer that is
+ * not transparent). */
+static const struct zmk_behavior_binding *eff_binding(uint8_t pos) {
+    for (int l = ZMK_KEYMAP_LAYERS_LEN - 1; l >= 0; l--) {
+        if (!zmk_keymap_layer_active(l)) {
+            continue;
+        }
+        const struct zmk_behavior_binding *b = zmk_keymap_get_layer_binding_at_idx(l, pos);
+
+        if (!b || !b->behavior_dev || strcmp(b->behavior_dev, LD_TRANS_NAME) == 0) {
+            continue;
+        }
+        return b;
+    }
+    return NULL;
+}
+
+static bool bind_has(const struct zmk_behavior_binding *b, uint32_t code) {
+    return (b->param1 & 0xFFFFFF) == (code & 0xFFFFFF) ||
+           (b->param2 & 0xFFFFFF) == (code & 0xFFFFFF);
+}
+
+static bool code_is_digit(uint32_t code) {
+    uint32_t page = (code >> 16) & 0xFF, id = code & 0xFFFF;
+
+    return page == 0x07 && id >= 0x1E && id <= 0x27;
+}
+
+static bool code_usable(uint32_t code) {
+    return !(code_is_digit(code) && CI_LEADER_NUM_LAYER != 0xFF &&
+             !zmk_keymap_layer_active(CI_LEADER_NUM_LAYER));
+}
+
+static void ld_send(void) {
+    uint32_t nib[2] = {0, 0}; /* 14 nibbles per message: 6 in the low 24 bits, 8 in p2 */
+    uint32_t lo[2] = {0, 0}, hi[2] = {0, 0};
+    int r = 0;
+
+    for (uint8_t p = 0; p < CI_POSITIONS; p++) {
+        if (geo_keys[p].half != CI_RIGHT) {
+            continue;
+        }
+        int bank = r / 14, n = r % 14;
+
+        if (bank < 2) {
+            if (n < 6) {
+                lo[bank] |= (uint32_t)ld_pal[p] << (4 * n);
+            } else {
+                hi[bank] |= (uint32_t)ld_pal[p] << (4 * (n - 6));
+            }
+        }
+        r++;
+    }
+    ARG_UNUSED(nib);
+    keyfx_sync_send(((uint32_t)KEYFX_OP_LEADER_A << 24) | lo[0], hi[0]);
+    keyfx_sync_send(((uint32_t)KEYFX_OP_LEADER_B << 24) | lo[1], hi[1]);
+}
+
+static void ld_resend(void) {
+    if (ld_cur >= 0) {
+        ld_send();
+    }
+}
+
+/* Work out which keys to light from the sequences that are still possible. */
+static void ld_rebuild(void) {
+    uint8_t pal[CI_POSITIONS] = {0};
+    bool any = false;
+
+    if (ld_cur >= 0) {
+        const struct ci_leader *L = &leaders[ld_cur];
+
+        for (uint8_t p = 0; p < CI_POSITIONS; p++) {
+            const struct zmk_behavior_binding *b = eff_binding(p);
+
+            for (uint8_t s = 0; b && s < L->nseq && !pal[p]; s++) {
+                if (!(ld_alive & BIT(s))) {
+                    continue;
+                }
+                for (uint8_t j = ld_depth; j < L->seqs[s].len; j++) {
+                    uint32_t code = L->seqs[s].codes[j];
+
+                    if (code_usable(code) && bind_has(b, code)) {
+                        pal[p] = L->seqs[s].pal;
+                        any = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    k_mutex_lock(&ov_lock, K_FOREVER);
+    memcpy(ld_pal, pal, sizeof(ld_pal));
+    ld_any = any;
+    k_mutex_unlock(&ov_lock);
+    kick();
+}
+
+static void ld_timeout_fn(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(ld_timeout_work, ld_timeout_fn);
+
+static void ld_end(int fx, uint8_t origin) {
+    ld_cur = -1;
+    ld_armed = false;
+    k_work_cancel_delayable(&ld_timeout_work);
+    ld_rebuild();
+    ld_send();
+    if (fx != FX_NONE && fx < FX_COUNT) {
+        trigger_fx(fx, origin);
+    }
+}
+
+static void ld_arm_timeout(void) {
+    uint16_t ms = ld_cur >= 0 && leaders[ld_cur].timeout_ms ? leaders[ld_cur].timeout_ms
+                                                              : CI_LEADER_TIMEOUT_MS;
+
+    if (ms) {
+        k_work_reschedule(&ld_timeout_work, K_MSEC(ms));
+    }
+}
+
+static void ld_timeout_fn(struct k_work *work) {
+    if (ld_cur >= 0) {
+        ld_end(leaders[ld_cur].abort_fx, ld_last_pos);
+    }
+}
+
+static void ld_key(uint32_t code) {
+    const struct ci_leader *L = &leaders[ld_cur];
+
+    if ((code >> 16) == 0x07 && (code & 0xFFFF) >= 0xE0 && (code & 0xFFFF) <= 0xE7) {
+        return; /* a bare modifier never ends or advances a sequence */
+    }
+    for (uint8_t i = 0; i < L->n_ignore; i++) {
+        if ((L->ignore[i] & 0xFFFFFF) == (code & 0xFFFFFF)) {
+            return;
+        }
+    }
+    for (uint8_t p = 0; p < CI_POSITIONS; p++) { /* where was it typed (for the effect origin) */
+        const struct zmk_behavior_binding *b = eff_binding(p);
+
+        if (b && bind_has(b, code)) {
+            ld_last_pos = p;
+            break;
+        }
+    }
+
+    uint32_t alive = 0;
+
+    for (uint8_t s = 0; s < L->nseq && s < CI_LD_MAX_SEQ; s++) {
+        if ((ld_alive & BIT(s)) && L->seqs[s].len > ld_depth &&
+            (L->seqs[s].codes[ld_depth] & 0xFFFFFF) == (code & 0xFFFFFF)) {
+            alive |= BIT(s);
+        }
+    }
+    if (!alive) {
+        ld_end(L->abort_fx, ld_last_pos);
+        return;
+    }
+    ld_depth++;
+    ld_alive = alive;
+    for (uint8_t s = 0; s < L->nseq; s++) {
+        if ((alive & BIT(s)) && L->seqs[s].len == ld_depth) {
+            ld_end(L->seqs[s].fx, ld_last_pos);
+            return;
+        }
+    }
+    ld_rebuild();
+    ld_send();
+    ld_arm_timeout();
+}
+
+static void ld_fn(struct k_work *work) {
+    struct ld_ev e;
+
+    while (k_msgq_get(&ld_q, &e, K_NO_WAIT) == 0) {
+        if (e.kind == 0) {
+            ld_cur = e.arg;
+            ld_depth = 0;
+            ld_alive = leaders[ld_cur].nseq >= 32 ? 0xFFFFFFFFu : BIT(leaders[ld_cur].nseq) - 1;
+            ld_last_pos = 0;
+            ld_rebuild();
+            ld_send();
+            ld_arm_timeout();
+        } else if (ld_cur >= 0) {
+            ld_key(e.arg);
+        }
+    }
+}
+static K_WORK_DEFINE(ld_work, ld_fn);
+
+static void ld_on_binding(const char *dev) {
+    for (size_t k = 0; k < CI_LEADER_COUNT; k++) {
+        if (strcmp(leaders[k].dev, dev) == 0) {
+            struct ld_ev e = {.kind = 0, .arg = k};
+
+            ld_armed = true;
+            if (k_msgq_put(&ld_q, &e, K_NO_WAIT) == 0) {
+                k_work_submit(&ld_work);
+            }
+            return;
+        }
+    }
+}
+
+static int on_keycode_leader(const zmk_event_t *eh) {
+    const struct zmk_keycode_state_changed *ev = as_zmk_keycode_state_changed(eh);
+
+    if (ev && ev->state && ld_armed) {
+        struct ld_ev e = {.kind = 1, .arg = ((uint32_t)ev->usage_page << 16) | ev->keycode};
+
+        if (k_msgq_put(&ld_q, &e, K_NO_WAIT) == 0) {
+            k_work_submit(&ld_work);
+        }
+    }
+    return ZMK_EV_EVENT_BUBBLE;
+}
+
+/* Sorts (and so runs) before the leader behavior sees the key. */
+ZMK_LISTENER(aaa_keyfx_ld, on_keycode_leader);
+ZMK_SUBSCRIPTION(aaa_keyfx_ld, zmk_keycode_state_changed);
+
 static int keyfx_central_init(void) {
+    ld_init();
     k_work_schedule(&beat_work, K_SECONDS(3));
     return 0;
 }
