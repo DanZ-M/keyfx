@@ -31,9 +31,9 @@ manifest:
       remote: zmkfirmware
       revision: v0.3 # Set to desired ZMK release.
       import: app/west.yml
-    - name: zmk-unicode
+    - name: keyfx
       remote: DanZ-M
-      revision: v0.3 # Should match ZMK release.
+      
   self:
     path: config
 
@@ -59,7 +59,7 @@ In that keyboard's shield add the devicetree node
     };
 
 
-In that keyboard's overlay add the two devicetree nodes
+In that keyboard's overlay add the two devicetree nodes and change the chain-length number to match your amount of led per side.
 
 / {
 led_overlay: led_overlay {
