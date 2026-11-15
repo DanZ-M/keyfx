@@ -190,14 +190,30 @@ Set the label of your leader behavior and, if you like, a colour per sequence:
 
 How it behaves:
 
-1. You press the leader key: every key used by every sequence lights up, each in its sequence's colour.
+1. You press the leader key: every other light goes off (indicators, underglow, back LEDs) and every key used by every sequence lights up, each in its sequence's colour. Set `CI_LEADER_DIM_OTHERS` to 0 to keep the other lights.
 2. You type a key: lights that belong to other sequences go out, and the key you typed goes out too. The rest of the matching sequences stay lit.
 3. Mistyped key, or a pause longer than the timeout: all lights go out (and the "aborted" effect plays, if set).
 4. Sequence finished: the lights go out and that sequence's "done" effect plays, if set.
 
 Sequence names come from your keymap (`tick`, `usb`, ...) and are not case sensitive.
 The sequences themselves are read from the keymap, so you never write them twice.
-Digits light only while `CI_LEADER_NUM_LAYER` is active. Set it if your base layer also has number keys.
+
+**Tell keyfx where the keys are.** keyfx does not guess your layout. List, per layer, which
+key position holds which letter or digit:
+
+```
+#define CI_LEADER_KEYS \
+    CI_LKEYS(0,  /* base layer */ \
+        CI_LKEY(Q, 1), CI_LKEY(W, 2), CI_LKEY(T, 5), CI_LKEY(LSHFT, 24)) \
+    CI_LKEYS(3,  /* number layer */ \
+        CI_LKEY(N1, 1), CI_LKEY(N2, 2))
+```
+
+- A key is looked up in the highest active layer that lists its position, so digits light only while their layer is active.
+- Typing is followed by key position, so it works even though the leader module swallows the keys.
+- A key that is not listed aborts the sequence. List the modifiers you use inside sequences (such as `LSHFT`) so they do not.
+- Replace the example positions with your own.
+
 The timeout comes from the leader behavior's `timeout-ms`, or from `CI_LEADER_TIMEOUT_MS`.
 
 ---

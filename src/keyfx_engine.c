@@ -209,8 +209,11 @@ struct ci_trigger {
 #ifndef CI_LEADER_SEQS
 #define CI_LEADER_SEQS
 #endif
-#ifndef CI_LEADER_NUM_LAYER
-#define CI_LEADER_NUM_LAYER 0xFF /* digits only light while this layer is active */
+#ifndef CI_LEADER_KEYS
+#define CI_LEADER_KEYS
+#endif
+#ifndef CI_LEADER_DIM_OTHERS
+#define CI_LEADER_DIM_OTHERS 1 /* 1 = turn every other light off while a sequence runs */
 #endif
 #ifndef CI_LEADER_ANIM
 #define CI_LEADER_ANIM CI_ANIM_SOLID
@@ -276,6 +279,24 @@ struct ci_seqcfg {
     uint32_t color;
     uint8_t fx;
 };
+
+/* where each leader-sequence key sits, per layer (CI_LEADER_KEYS in the config) */
+struct ci_lk {
+    uint32_t code;
+    uint8_t pos;
+};
+struct ci_lkl {
+    uint8_t layer;
+    const struct ci_lk *keys;
+    uint8_t n;
+};
+#define CI_LKEY(_code, _pos) {(_code), (_pos)}
+#define CI_LKEYS(_layer, ...)                                                                      \
+    {                                                                                              \
+        .layer = (_layer), .keys = (const struct ci_lk[]){__VA_ARGS__},                            \
+        .n = sizeof((const struct ci_lk[]){__VA_ARGS__}) / sizeof(struct ci_lk),                   \
+    },
+static const struct ci_lkl lkeys[] = {CI_LEADER_KEYS{.keys = NULL}};
 
 #define CI_LD_CODE(_n, _prop, _i) DT_PROP_BY_IDX(_n, _prop, _i),
 #define CI_LD_SEQ(_n)                                                                              \
@@ -774,7 +795,14 @@ static bool push_frame(int *rc_out) {
     bool any_lit;
 
     memcpy(out_frame, last_frame, sizeof(out_frame));
-    bool animated = paint_rules(now, &any_lit);
+    bool dim = CI_LEADER_DIM_OTHERS && ld_any;
+    bool animated = false;
+
+    if (dim) { /* a leader sequence is running: only its keys stay lit */
+        memset(out_frame, 0, sizeof(out_frame));
+    } else {
+        animated = paint_rules(now, &any_lit);
+    }
     animated |= paint_leader(now);
     bool fx_running = paint_effects(now);
 
@@ -1113,6 +1141,7 @@ static void act_fn(struct k_work *work) {
 static K_WORK_DEFINE(act_work, act_fn);
 
 static void ld_on_binding(const char *dev);
+static void ld_on_position(uint8_t pos);
 
 void keyfx_on_binding(const struct zmk_behavior_binding *b,
                      const struct zmk_behavior_binding_event *ev) {
@@ -1166,6 +1195,8 @@ static bool pos_in(const struct ci_trigger *t, uint8_t p) {
 
 static void handle_press(uint8_t p, int64_t now) {
     bool fired = false;
+
+    ld_on_position(p);
 
     last_press[p] = now;
     key_down[p] = true;
@@ -1249,7 +1280,6 @@ ZMK_SUBSCRIPTION(aaa_keyfx_pos, zmk_position_state_changed);
 
 /* ---- central: leader key lighting ---- */
 
-#define LD_TRANS_NAME DEVICE_DT_NAME(DT_NODELABEL(trans))
 
 struct ld_ev {
     uint8_t kind; /* 0 = a leader behavior started (arg = leader index), 1 = key typed */
@@ -1296,37 +1326,24 @@ static void ld_init(void) {
     }
 }
 
-/* The binding that is really in effect at a key position (highest active layer that is
- * not transparent). */
-static const struct zmk_behavior_binding *eff_binding(uint8_t pos) {
-    for (int l = ZMK_KEYMAP_LAYERS_LEN - 1; l >= 0; l--) {
-        if (!zmk_keymap_layer_active(l)) {
-            continue;
-        }
-        const struct zmk_behavior_binding *b = zmk_keymap_get_layer_binding_at_idx(l, pos);
+/* The leader code at a key position: from the highest active layer that lists the position
+ * (CI_LEADER_KEYS). 0 = the position is not listed. */
+static uint32_t ld_code_at(uint8_t pos) {
+    int best = -1;
+    uint32_t code = 0;
 
-        if (!b || !b->behavior_dev || strcmp(b->behavior_dev, LD_TRANS_NAME) == 0) {
+    for (const struct ci_lkl *g = lkeys; g->keys; g++) {
+        if (g->layer >= 8 || !zmk_keymap_layer_active(g->layer) || (int)g->layer < best) {
             continue;
         }
-        return b;
+        for (uint8_t i = 0; i < g->n; i++) {
+            if (g->keys[i].pos == pos) {
+                best = g->layer;
+                code = g->keys[i].code;
+            }
+        }
     }
-    return NULL;
-}
-
-static bool bind_has(const struct zmk_behavior_binding *b, uint32_t code) {
-    return (b->param1 & 0xFFFFFF) == (code & 0xFFFFFF) ||
-           (b->param2 & 0xFFFFFF) == (code & 0xFFFFFF);
-}
-
-static bool code_is_digit(uint32_t code) {
-    uint32_t page = (code >> 16) & 0xFF, id = code & 0xFFFF;
-
-    return page == 0x07 && id >= 0x1E && id <= 0x27;
-}
-
-static bool code_usable(uint32_t code) {
-    return !(code_is_digit(code) && CI_LEADER_NUM_LAYER != 0xFF &&
-             !zmk_keymap_layer_active(CI_LEADER_NUM_LAYER));
+    return code;
 }
 
 static void ld_send(void) {
@@ -1369,17 +1386,15 @@ static void ld_rebuild(void) {
         const struct ci_leader *ldr = &leaders[ld_cur];
 
         for (uint8_t p = 0; p < CI_POSITIONS; p++) {
-            const struct zmk_behavior_binding *b = eff_binding(p);
+            uint32_t c = ld_code_at(p);
 
-            for (uint8_t s = 0; b && s < ldr->nseq && !pal[p]; s++) {
-                if (!(ld_alive & BIT(s))) {
+            for (uint8_t sq = 0; c && sq < ldr->nseq && !pal[p]; sq++) {
+                if (!(ld_alive & BIT(sq))) {
                     continue;
                 }
-                for (uint8_t j = ld_depth; j < ldr->seqs[s].len; j++) {
-                    uint32_t code = ldr->seqs[s].codes[j];
-
-                    if (code_usable(code) && bind_has(b, code)) {
-                        pal[p] = ldr->seqs[s].pal;
+                for (uint8_t j = ld_depth; j < ldr->seqs[sq].len; j++) {
+                    if ((ldr->seqs[sq].codes[j] & 0xFFFFFF) == (c & 0xFFFFFF)) {
+                        pal[p] = ldr->seqs[sq].pal;
                         any = true;
                         break;
                     }
@@ -1423,26 +1438,18 @@ static void ld_timeout_fn(struct k_work *work) {
     }
 }
 
-static void ld_key(uint32_t code) {
+static void ld_key(uint8_t pos, uint32_t code) {
     const struct ci_leader *ldr = &leaders[ld_cur];
 
-    if ((code >> 16) == 0x07 && (code & 0xFFFF) >= 0xE0 && (code & 0xFFFF) <= 0xE7) {
+    ld_last_pos = pos;
+    if (code && (code >> 16) == 0x07 && (code & 0xFFFF) >= 0xE0 && (code & 0xFFFF) <= 0xE7) {
         return; /* a bare modifier never ends or advances a sequence */
     }
-    for (uint8_t i = 0; i < ldr->n_ignore; i++) {
+    for (uint8_t i = 0; code && i < ldr->n_ignore; i++) {
         if ((ldr->ignore[i] & 0xFFFFFF) == (code & 0xFFFFFF)) {
             return;
         }
     }
-    for (uint8_t p = 0; p < CI_POSITIONS; p++) { /* where was it typed (for the effect origin) */
-        const struct zmk_behavior_binding *b = eff_binding(p);
-
-        if (b && bind_has(b, code)) {
-            ld_last_pos = p;
-            break;
-        }
-    }
-
     uint32_t alive = 0;
 
     for (uint8_t s = 0; s < ldr->nseq && s < CI_LD_MAX_SEQ; s++) {
@@ -1481,7 +1488,7 @@ static void ld_fn(struct k_work *work) {
             ld_send();
             ld_arm_timeout();
         } else if (ld_cur >= 0) {
-            ld_key(e.arg);
+            ld_key(e.arg & 0xFF, e.arg >> 8);
         }
     }
 }
@@ -1501,22 +1508,17 @@ static void ld_on_binding(const char *dev) {
     }
 }
 
-static int on_keycode_leader(const zmk_event_t *eh) {
-    const struct zmk_keycode_state_changed *ev = as_zmk_keycode_state_changed(eh);
-
-    if (ev && ev->state && ld_armed) {
-        struct ld_ev e = {.kind = 1, .arg = ((uint32_t)ev->usage_page << 16) | ev->keycode};
+/* Called for every key press (position) while a leader sequence is running. The leader
+ * module swallows the keycodes, but ZMK still tells us which key position was pressed. */
+static void ld_on_position(uint8_t pos) {
+    if (ld_armed) {
+        struct ld_ev e = {.kind = 1, .arg = ((ld_code_at(pos) & 0xFFFFFF) << 8) | pos};
 
         if (k_msgq_put(&ld_q, &e, K_NO_WAIT) == 0) {
             k_work_submit(&ld_work);
         }
     }
-    return ZMK_EV_EVENT_BUBBLE;
 }
-
-/* Sorts (and so runs) before the leader behavior sees the key. */
-ZMK_LISTENER(aaa_keyfx_ld, on_keycode_leader);
-ZMK_SUBSCRIPTION(aaa_keyfx_ld, zmk_keycode_state_changed);
 
 static int keyfx_central_init(void) {
     ld_init();

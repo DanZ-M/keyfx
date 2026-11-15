@@ -203,9 +203,6 @@
  *   CI_LEADER_SEQ(sequence node name, colour, effect when this one is done)
  *             optional, gives one sequence its own colour (FX_NONE = leader's default effect)
  *
- * Keys are found through your layers as they are right now, so digits only light on the
- * layer where they are typed. If your base layer also has number keys, set
- * CI_LEADER_NUM_LAYER to your number layer so digits only light there.
  * Leave both lists empty to turn the feature off. Up to 15 colours.
  * =========================================================================== */
 #define CI_LEADERS \
@@ -217,7 +214,21 @@
 	CI_LEADER_SEQ(ble,  CI_CYAN,   FX_NONE) \
 	CI_LEADER_SEQ(btc,  CI_RED,    FX_NONE)
 
-/* #define CI_LEADER_NUM_LAYER 3 */           /* layer where the digit keys live */
+/* Where the sequence keys are on the keyboard, per layer. Only these keys can light, and
+ * only these (plus any key listed in the keymap's ignore-keys) can be typed during a
+ * sequence without aborting it. A key is looked up in the highest active layer that lists
+ * its position, so digits light only while the layer that holds them is active.
+ *   CI_LEADER_KEYS = CI_LKEYS(layer number, CI_LKEY(KEY, position), ...) ...
+ * Key names are ZMK's (A..Z, N0..N9, LSHFT, ...). Add the modifiers you use inside a
+ * sequence (for example LSHFT) so typing them does not abort it. */
+#define CI_LEADER_KEYS \
+	CI_LKEYS(0, /* base layer: letters */ \
+		CI_LKEY(Q, 1),  CI_LKEY(W, 2),  CI_LKEY(E, 3),  CI_LKEY(R, 4),  CI_LKEY(T, 5), \
+		CI_LKEY(A, 13), CI_LKEY(S, 14), CI_LKEY(D, 15), CI_LKEY(F, 16), CI_LKEY(G, 17)) \
+	CI_LKEYS(3, /* NUMB layer: digits */ \
+		CI_LKEY(N1, 1), CI_LKEY(N2, 2), CI_LKEY(N3, 3), CI_LKEY(N4, 4), CI_LKEY(N5, 5))
+
+/* #define CI_LEADER_DIM_OTHERS 0 */          /* 1 (default): every other light goes off during a sequence */
 /* #define CI_LEADER_ANIM CI_ANIM_BREATHE */  /* solid (default), breathe or blink */
 /* #define CI_LEADER_BRIGHTNESS_PERCENT 80 */
 /* #define CI_LEADER_TIMEOUT_MS 5000 */       /* only if your leader has no timeout-ms */
