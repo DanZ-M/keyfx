@@ -1,0 +1,24 @@
+description: |
+  Plays a keyfx light effect (by name, from config/keyfx_config.h) and then runs the
+  wrapped binding. Use it anywhere a binding is accepted: combos, macros, tap dances,
+  hold taps, layer keys. The effect starts exactly when ZMK runs the action.
+
+compatible: "zmk,behavior-keyfx-wrap"
+
+include: zero_param.yaml
+
+properties:
+  bindings:
+    type: phandle-array
+    required: true
+    description: The binding to run (exactly one)
+  fx-name:
+    type: string
+    required: true
+    description: Name of an effect declared with CI_EFFECT in keyfx_config.h
+  origin-position:
+    type: int
+    default: 255
+    description: |
+      Key position (0-41) the effect starts from. 255 = the position of the key that
+      triggered it (combos have no real position, so they start at position 0).

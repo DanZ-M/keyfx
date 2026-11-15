@@ -1,0 +1,56 @@
+/*
+ * WS2812 strip on SPI3 MOSI = P0.06 (D1). 27 LEDs per half:
+ * 6 at the back, then 21 under the keys (data enters at the back).
+ *
+ * ZMK's underglow talks to "led_overlay", a thin wrapper around the real strip that
+ * paints the caps/num/layer indicator colours on top of whatever underglow is doing.
+ */
+
+#include <dt-bindings/led/led.h>
+
+&pinctrl {
+	spi3_default: spi3_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_MOSI, 0, 6)>;
+		};
+	};
+
+	spi3_sleep: spi3_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_MOSI, 0, 6)>;
+			low-power-enable;
+		};
+	};
+};
+
+&spi3 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+
+	pinctrl-0 = <&spi3_default>;
+	pinctrl-1 = <&spi3_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	led_strip: ws2812@0 {
+		compatible = "worldsemi,ws2812-spi";
+		reg = <0>; /* ignored, but necessary for SPI bindings */
+		spi-max-frequency = <4000000>;
+		chain-length = <27>;
+		spi-cpha;
+		spi-one-frame = <0x70>;  /* 11110000: 625 ns high and 625 ns low */
+		spi-zero-frame = <0x40>; /* 11000000: 312.5 ns high and 937.5 ns low */
+		color-mapping = <LED_COLOR_ID_GREEN LED_COLOR_ID_RED LED_COLOR_ID_BLUE>;
+	};
+};
+
+/ {
+	led_overlay: led_overlay {
+		compatible = "keyfx,led-overlay";
+		strip = <&led_strip>;
+		chain-length = <27>;
+	};
+
+	chosen {
+		zmk,underglow = &led_overlay;
+	};
+};

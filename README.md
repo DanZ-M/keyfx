@@ -16,13 +16,64 @@ per half (6 LEDs at the back + 21 under the keys).
 
 ## Using keyfx in another project / its own repo
 
-1. Copy `modules/keyfx` to its own repository (the `zephyr/module.yml` inside it is ready).
-2. Add it to the other project's `west.yml` as a project.
-3. In that keyboard's shield/overlay add the two devicetree nodes (see this shield's
-   `korz.dtsi` and `boards/nice_nano_nrf52840_zmk.overlay`), and copy `config/keyfx_config.h`
-   (edit section 2 for the new layout).
-4. In this repo, replace the three keyfx lines in `zephyr/module.yml` with only
-   `settings: board_root: .`.
+Usage
+Add keyfx to the other project's `west.yml` as a project.
+To load the module, add the following entries to remotes and projects in config/west.yml.
+
+manifest:
+remotes: - name: zmkfirmware
+url-base: https://github.com/zmkfirmware - name: DanZ-M
+url-base: https://github.com/DanZ-M
+projects: - name: zmk
+remote: zmkfirmware
+revision: v0.3 # Set to desired ZMK release.
+import: app/west.yml - name: keyfx
+remote: DanZ-M
+revision: v0.3 # Should match ZMK release.
+self:
+path: config
+
+Note:
+
+In that keyboard's shield add the devicetree node
+/ {
+chosen {
+zmk,kscan = &kscan0;
+zmk,matrix-...................
+};
+
+    behaviors {
+    	/* light effects control + left/right sync, see modules/keyfx/include/dt-bindings/zmk/keyfx.h */
+    	kfx: keyfx {
+    		compatible = "zmk,behavior-keyfx";
+    		#binding-cells = <2>;
+    	};
+    };
+
+}
+
+In that keyboard's overlay add the two devicetree nodes
+
+/ {
+led_overlay: led_overlay {
+compatible = "keyfx,led-overlay";
+strip = <&led_strip>;
+chain-length = <27>;
+};
+
+    chosen {
+    	zmk,underglow = &led_overlay;
+    };
+
+};
+
+and add
+
+#include <dt-bindings/led/led.h>
+
+(see this shield's `your_keyboard_name.dtsi` and `boards/example_nice_nano_nrf52840_zmk.overlay`), and copy 'keyfx_config.h' into your zmk-config, config folder: `config/keyfx_config.h`
+(edit section 2 for the new layout). 4. In this repo, replace the three keyfx lines in `zephyr/module.yml` with only
+`settings: board_root: .`.
 
 `dt-bindings/zmk/korz_fx.h` inside the module is a one-line alias kept so the keymap's
 original `#include` keeps working; new projects include `<dt-bindings/zmk/keyfx.h>`.

@@ -1,0 +1,5 @@
+description: keyfx light effects control (splash toggle, play effect) and left/right state sync
+
+compatible: "zmk,behavior-keyfx"
+
+include: two_param.yaml

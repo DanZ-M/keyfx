@@ -1,0 +1,17 @@
+description: |
+  LED strip wrapper. Forwards frames to the real strip after painting indicator
+  colours (caps lock, num lock, layers) over them.
+
+compatible: "keyfx,led-overlay"
+
+include: base.yaml
+
+properties:
+  strip:
+    type: phandle
+    required: true
+    description: The real LED strip (e.g. the ws2812 node)
+  chain-length:
+    type: int
+    required: true
+    description: Number of LEDs; must match the real strip

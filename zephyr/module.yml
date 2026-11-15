@@ -1,0 +1,8 @@
+# Standalone use of keyfx (later, from its own repository): add the repo to west.yml
+# as a project and this file is all Zephyr needs.
+name: keyfx
+build:
+  cmake: .
+  kconfig: Kconfig
+  settings:
+    dts_root: .

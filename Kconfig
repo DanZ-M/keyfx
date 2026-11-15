@@ -1,0 +1,24 @@
+config KEYFX
+	bool "keyfx WS2812 light engine (indicators, effects, left/right sync)"
+	default y
+	depends on ZMK_RGB_UNDERGLOW && DT_HAS_KEYFX_LED_OVERLAY_ENABLED
+
+if KEYFX
+
+config KEYFX_CAPS_WORD_PEEK
+	bool "Detect caps word by reading the caps word behavior's state"
+	default y
+	help
+	  ZMK has no public caps word state. This reads the 'active' flag the behavior
+	  keeps as the first member of its data. Disable it if a ZMK update breaks it;
+	  CI_CAPS_WORD rules then stay off.
+
+config KEYFX_ACTION_HOOK
+	bool "Light effects that follow ZMK combos, macros and behaviors (no keymap changes)"
+	default y
+	depends on !ZMK_SPLIT || ZMK_SPLIT_ROLE_CENTRAL
+	help
+	  Intercepts ZMK's behavior invocations at link time to start the effects listed in
+	  CI_ACTIONS. Disable it if a ZMK update breaks the build; CI_ACTIONS then do nothing.
+
+endif # KEYFX
