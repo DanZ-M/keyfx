@@ -1140,7 +1140,7 @@ static void act_fn(struct k_work *work) {
 }
 static K_WORK_DEFINE(act_work, act_fn);
 
-static void ld_on_binding(const char *dev);
+static void ld_on_binding(const char *dev, uint32_t position);
 static void ld_on_position(uint8_t pos);
 
 void keyfx_on_binding(const struct zmk_behavior_binding *b,
@@ -1150,7 +1150,7 @@ void keyfx_on_binding(const struct zmk_behavior_binding *b,
     if (!b->behavior_dev || strcmp(b->behavior_dev, kfx_name) == 0) {
         return; /* our own sync messages */
     }
-    ld_on_binding(b->behavior_dev);
+    ld_on_binding(b->behavior_dev, ev->position);
 
     bool virtual_pos = ev->position >= CI_POSITIONS;
 
@@ -1494,15 +1494,30 @@ static void ld_fn(struct k_work *work) {
 }
 static K_WORK_DEFINE(ld_work, ld_fn);
 
-static void ld_on_binding(const char *dev) {
+/* The key that started the leader (a hold-tap or tap dance) must not count as the first key
+ * of the sequence, even if its press is seen just after the leader started. */
+static uint8_t ld_skip_pos = 0xFF;
+static int64_t ld_skip_until;
+
+static void ld_on_binding(const char *dev, uint32_t position) {
     for (size_t k = 0; k < CI_LEADER_COUNT; k++) {
         if (strcmp(leaders[k].dev, dev) == 0) {
             struct ld_ev e = {.kind = 0, .arg = k};
 
+            ld_skip_pos = position < CI_POSITIONS ? (uint8_t)position : 0xFF;
+            ld_skip_until = k_uptime_get() + 120;
             ld_armed = true;
             if (k_msgq_put(&ld_q, &e, K_NO_WAIT) == 0) {
                 k_work_submit(&ld_work);
             }
+#ifdef CI_LEADER_DEBUG_FX
+            /* test aid: play this effect whenever a leader behavior start is detected */
+            struct pending_fx dbg = {.fx = CI_LEADER_DEBUG_FX, .origin = 0};
+
+            if (k_msgq_put(&act_q, &dbg, K_NO_WAIT) == 0) {
+                k_work_submit(&act_work);
+            }
+#endif
             return;
         }
     }
@@ -1511,6 +1526,9 @@ static void ld_on_binding(const char *dev) {
 /* Called for every key press (position) while a leader sequence is running. The leader
  * module swallows the keycodes, but ZMK still tells us which key position was pressed. */
 static void ld_on_position(uint8_t pos) {
+    if (ld_armed && pos == ld_skip_pos && k_uptime_get() < ld_skip_until) {
+        return;
+    }
     if (ld_armed) {
         struct ld_ev e = {.kind = 1, .arg = ((ld_code_at(pos) & 0xFFFFFF) << 8) | pos};
 
