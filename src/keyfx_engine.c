@@ -91,6 +91,7 @@ enum ci_fx_type {
     CI_FX_BLOOM,      /* a percentage of the LEDs swell and fade at random          */
     CI_FX_FLASH,      /* everything flashes and fades                               */
     CI_FX_SPLASH,     /* small quick ripple, meant for keystrokes                   */
+    CI_FX_MIX,        /* a mix of other effects (see CI_MIXES)                      */
 };
 
 #define CI_RAINBOW 0xFFFFFFFFu /* effect colour: hue follows position and time */
@@ -132,6 +133,32 @@ struct ci_fx_def {
     uint16_t duration_ms;
     uint16_t arg;
 };
+
+/* one part of a mix: an existing effect with its own timing and look (see CI_MIXES) */
+struct ci_part {
+    uint8_t fx;           /* the effect to play (FX_ id, set by CI_PART)           */
+    uint16_t start_ms;    /* when it starts, from the start of the mix (a pause)   */
+    uint16_t duration_ms; /* play the effect over this long instead (0 = normal)   */
+    uint16_t speed;       /* percent, 100 = normal                                 */
+    int16_t accel;        /* change of speed in percent per second (+ faster, - slower) */
+    uint8_t brightness;   /* percent of the effect brightness (0 = 100)            */
+    uint16_t fade_in_ms, fade_out_ms;
+    uint16_t pulse_ms;    /* flash on and off with this period                     */
+    uint16_t breathe_ms;  /* swell and dim with this period                        */
+    uint8_t repeat;       /* number of times (0 = once)                            */
+    uint16_t pause_ms;    /* pause between repeats                                 */
+    uint8_t origin;       /* CI_AT(position): start from this key (0 = the trigger's) */
+    uint32_t color, color2; /* colour override; with color2 a left-to-right gradient */
+    uint16_t len;         /* worked out at start-up                                */
+};
+
+struct ci_mix {
+    struct ci_part *parts;
+    uint8_t n;
+};
+
+#define CI_AT(_pos) ((_pos) + 1)
+#define CI_PART(_fx, ...) {.fx = FX_##_fx, __VA_ARGS__},
 
 struct ci_trigger {
     uint8_t kind;
@@ -251,22 +278,48 @@ struct ci_trigger {
 #define CI_ACTIONS
 #endif
 
+#ifndef CI_MIXES
+#define CI_MIXES
+#endif
+
 enum {
 #undef CI_EFFECT
 #define CI_EFFECT(_name, _type, _color, _ms, _arg) FX_##_name,
     CI_EFFECTS
+        FX_BASE_COUNT
+};
+
+enum {
+    FX_MIXES_START_ = FX_BASE_COUNT - 1, /* the first mix is numbered FX_BASE_COUNT */
+#undef CI_MIX
+#define CI_MIX(_name, ...) FX_##_name,
+    CI_MIXES
         FX_COUNT
 };
 
-static const struct ci_fx_def fx_defs[] = {
+static struct ci_fx_def fx_defs[] = {
 #undef CI_EFFECT
 #define CI_EFFECT(_name, _type, _color, _ms, _arg) {_type, _color, _ms, _arg},
-    CI_EFFECTS};
+    CI_EFFECTS
+#undef CI_MIX
+#define CI_MIX(_name, ...) [FX_##_name] = {CI_FX_MIX, 0, 0, FX_##_name - FX_BASE_COUNT},
+        CI_MIXES};
 
 static const char *const fx_names[] = {
 #undef CI_EFFECT
 #define CI_EFFECT(_name, _type, _color, _ms, _arg) #_name,
-    CI_EFFECTS};
+    CI_EFFECTS
+#undef CI_MIX
+#define CI_MIX(_name, ...) [FX_##_name] = #_name,
+        CI_MIXES};
+
+/* the parts of every mix, then the table of mixes */
+#undef CI_MIX
+#define CI_MIX(_name, ...) static struct ci_part mixparts_##_name[] = {__VA_ARGS__};
+CI_MIXES
+#undef CI_MIX
+#define CI_MIX(_name, ...) {mixparts_##_name, ARRAY_SIZE(mixparts_##_name)},
+static struct ci_mix mixes[] = {CI_MIXES{NULL, 0}};
 
 static const struct ci_rule rules[] = {CI_RULES{.src = CI_END}};
 
@@ -681,6 +734,141 @@ static uint32_t fx_level(const struct ci_fx_def *d, const struct fx_inst *f, int
     }
 }
 
+/* colour of an effect at an LED: plain, rainbow, or a left-to-right gradient */
+static int16_t lx_min, lx_max;
+
+static uint32_t fx_color(uint32_t c, uint32_t c2, int led, int32_t t) {
+    if (c == CI_RAINBOW) {
+        struct led_rgb h = hue_rgb((lx[led] * 2 + t / 5) % 360);
+
+        return ((uint32_t)h.r << 16) | ((uint32_t)h.g << 8) | h.b;
+    }
+    if (c2) {
+        int32_t span = MAX(lx_max - lx_min, 1);
+        uint32_t g = (uint32_t)(((lx[led] - lx_min) * 256) / span);
+        uint32_t out = 0;
+
+        g = MIN(g, 256u);
+        for (int sh = 16; sh >= 0; sh -= 8) {
+            uint32_t x = (c >> sh) & 0xFF, y = (c2 >> sh) & 0xFF;
+
+            out |= ((x * (256 - g) + y * g) >> 8) << sh;
+        }
+        return out;
+    }
+    return c;
+}
+
+static void fx_add(int led, uint32_t lvl, uint32_t color, uint32_t pct) {
+    struct led_rgb add = rgb_from(color, lvl, pct);
+
+    out_frame[led].r = MIN(255, out_frame[led].r + add.r);
+    out_frame[led].g = MIN(255, out_frame[led].g + add.g);
+    out_frame[led].b = MIN(255, out_frame[led].b + add.b);
+}
+
+/* How far into the effect itself a part is, `tp` ms after the part started: a speed that can
+ * change steadily (accel), so the effect can speed up or slow down. */
+static int32_t part_speed(const struct ci_part *p, int32_t ref_dur) {
+    return p->duration_ms ? (ref_dur * 100) / p->duration_ms : (p->speed ? p->speed : 100);
+}
+
+static int32_t part_warp(const struct ci_part *p, int32_t ref_dur, int32_t tp) {
+    int64_t sp = part_speed(p, ref_dur);
+    int64_t u = sp * tp / 100 + (int64_t)p->accel * tp * tp / 200000;
+
+    return u < 0 ? 0 : (int32_t)MIN(u, (int64_t)ref_dur);
+}
+
+static uint16_t part_len(const struct ci_part *p, int32_t ref_dur) {
+    int32_t sp = part_speed(p, ref_dur);
+
+    if (ref_dur <= 0 || sp <= 0) {
+        return 0;
+    }
+    for (int32_t tp = 0; tp < 30000; tp += 10) {
+        bool stalled = sp + (int32_t)p->accel * tp / 1000 <= 0; /* slowed to a stop */
+
+        if (stalled || part_warp(p, ref_dur, tp) >= ref_dur) {
+            return (uint16_t)tp;
+        }
+    }
+    return 30000;
+}
+
+static void mixes_init(void) {
+    lx_min = lx_max = lx[0];
+    for (int i = 0; i < CI_N; i++) {
+        lx_min = MIN(lx_min, lx[i]);
+        lx_max = MAX(lx_max, lx[i]);
+    }
+    for (int m = 0; m < FX_COUNT - FX_BASE_COUNT; m++) {
+        uint32_t total = 0;
+
+        for (int i = 0; i < mixes[m].n; i++) {
+            struct ci_part *p = &mixes[m].parts[i];
+
+            p->len = p->fx < FX_BASE_COUNT ? part_len(p, fx_defs[p->fx].duration_ms) : 0;
+            uint32_t rep = p->repeat ? p->repeat : 1;
+            uint32_t end = p->start_ms + rep * p->len + (rep - 1) * p->pause_ms;
+
+            total = MAX(total, end);
+        }
+        fx_defs[FX_BASE_COUNT + m].duration_ms = (uint16_t)MIN(total + 30, 65535u);
+    }
+}
+
+static void paint_mix(const struct ci_fx_def *d, const struct fx_inst *f, int32_t t) {
+    const struct ci_mix *m = &mixes[d->arg];
+
+    for (int i = 0; i < m->n; i++) {
+        const struct ci_part *p = &m->parts[i];
+        int32_t tp = t - p->start_ms;
+        uint32_t cyc = p->len + p->pause_ms;
+        uint32_t rep = p->repeat ? p->repeat : 1;
+
+        if (!p->len || tp < 0 || (uint32_t)tp / cyc >= rep) {
+            continue;
+        }
+        tp = (uint32_t)tp % cyc;
+        if (tp > p->len) {
+            continue;
+        }
+        const struct ci_fx_def *rd = &fx_defs[p->fx];
+        struct fx_inst pf = *f;
+
+        pf.seed ^= (uint32_t)(i + 1) * 0x9E3779B1u;
+        if (p->origin) {
+            pos_xy(p->origin - 1, &pf.ox, &pf.oy);
+        }
+        int32_t u = part_warp(p, rd->duration_ms, tp);
+        uint32_t env = 255;
+
+        if (p->fade_in_ms && tp < p->fade_in_ms) {
+            env = (env * tp) / p->fade_in_ms;
+        }
+        if (p->fade_out_ms && (int32_t)p->len - tp < p->fade_out_ms) {
+            env = (env * ((int32_t)p->len - tp)) / p->fade_out_ms;
+        }
+        if (p->pulse_ms >= 2) {
+            env = (tp % p->pulse_ms) < (p->pulse_ms / 2) ? env : 0;
+        }
+        if (p->breathe_ms >= 2) {
+            env = (env * anim_factor_p(CI_ANIM_BREATHE, tp, p->breathe_ms)) / 255;
+        }
+        uint32_t pct = (CI_FX_BRIGHTNESS_PERCENT * (p->brightness ? p->brightness : 100)) / 100;
+        uint32_t color = p->color ? p->color : rd->color;
+
+        for (int led = 0; led < CI_N; led++) {
+            uint32_t lvl = (fx_level(rd, &pf, led, u) * env) / 255;
+
+            if (lvl) {
+                fx_add(led, lvl, fx_color(color, p->color2, led, u), pct);
+            }
+        }
+    }
+}
+
 /* Paints all running effects onto out_frame; returns true while any is running. */
 static bool paint_effects(int64_t now) {
     bool running = false;
@@ -700,22 +888,16 @@ static bool paint_effects(int64_t now) {
         }
         running = true;
 
+        if (d->type == CI_FX_MIX) {
+            paint_mix(d, f, t);
+            continue;
+        }
         for (int led = 0; led < CI_N; led++) {
             uint32_t lvl = fx_level(d, f, led, t);
-            if (!lvl) {
-                continue;
+
+            if (lvl) {
+                fx_add(led, lvl, fx_color(d->color, 0, led, t), CI_FX_BRIGHTNESS_PERCENT);
             }
-            struct led_rgb add;
-            if (d->color == CI_RAINBOW) {
-                struct led_rgb base = hue_rgb((lx[led] * 2 + t / 5) % 360);
-                add = rgb_from(((uint32_t)base.r << 16) | ((uint32_t)base.g << 8) | base.b, lvl,
-                               CI_FX_BRIGHTNESS_PERCENT);
-            } else {
-                add = rgb_from(d->color, lvl, CI_FX_BRIGHTNESS_PERCENT);
-            }
-            out_frame[led].r = MIN(255, out_frame[led].r + add.r);
-            out_frame[led].g = MIN(255, out_frame[led].g + add.g);
-            out_frame[led].b = MIN(255, out_frame[led].b + add.b);
         }
     }
     return running;
@@ -1046,6 +1228,7 @@ static int ov_init(const struct device *dev) {
         fx_slots[i].id = -1;
     }
     build_geometry();
+    mixes_init();
     ov_ready = true;
     return 0;
 }
