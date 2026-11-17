@@ -92,6 +92,13 @@ enum ci_fx_type {
     CI_FX_BLOOM,      /* a percentage of the LEDs swell and fade at random          */
     CI_FX_FLASH,      /* everything flashes and fades                               */
     CI_FX_SPLASH,     /* small quick ripple, meant for keystrokes                   */
+    CI_FX_BEAM,       /* laser: one or more shots from a key, at an angle or to a key */
+    CI_FX_SNAKE,      /* a wiggling trail travelling from a start key to an end key   */
+    CI_FX_SPIRAL,     /* a trail spiralling out from (or, inverted, into) a key       */
+    CI_FX_BALL,       /* a bouncing ball with a trail                                 */
+    CI_FX_LIGHTNING,  /* a jagged bolt with random brightness and flicker             */
+    CI_FX_SWIPE,      /* a wall of light sweeping in any direction                    */
+    CI_FX_MATRIX,     /* columns of falling light with a shimmering shine             */
     CI_FX_MIX,        /* a mix of other effects (see CI_MIXES)                      */
 };
 
@@ -133,6 +140,24 @@ struct ci_fx_def {
     uint32_t color;
     uint16_t duration_ms;
     uint16_t arg;
+    /* motion effects (see CI_EFFECTX in keyfx_config.h); 0 = default / not used */
+    uint8_t from;   /* start key, CI_AT(pos); 0 = the key that triggered the effect */
+    uint8_t to;     /* end key, CI_AT(pos); sets direction and distance             */
+    int16_t angle;  /* direction in degrees: 0 right, 90 down, 180 left, 270 up     */
+    uint16_t dist;  /* distance / radius in tenths of a key (0 = automatic)         */
+    uint8_t count;  /* shots (beam), bolts (lightning), % of columns (matrix)       */
+    uint16_t spread; /* degrees covered by the shots of a fan                       */
+    uint8_t size;   /* trail length, percent of the path                            */
+    uint8_t width;  /* thickness, tenths of a key                                   */
+    uint8_t wiggle; /* sideways amount (snake, lightning)                           */
+    uint8_t turns;  /* spiral turns                                                 */
+    uint16_t height; /* ball drop height, tenths of a key                           */
+    uint8_t bounce; /* ball bounciness, percent of height kept at each bounce       */
+    int8_t accel;   /* -100..100: + starts slow and ends fast, - the opposite       */
+    bool invert;    /* run backwards (converge instead of spread)                   */
+    bool random;    /* random direction every time                                  */
+    bool bidir;     /* swipe: spread both ways from the start line                  */
+    bool fill;      /* swipe: leave what the front passed lit until the end         */
 };
 
 /* one part of a mix: an existing effect with its own timing and look (see CI_MIXES) */
@@ -242,6 +267,7 @@ struct ci_trigger {
     },
 
 #define CI_EFFECT(_name, _type, _color, _ms, _arg) {_type, _color, _ms, _arg},
+#define CI_EFFECTX(_name, _type, _color, _ms, ...) {.type = _type, .color = _color, .duration_ms = _ms, __VA_ARGS__},
 
 #include "keyfx_config.h"
 
@@ -286,6 +312,8 @@ struct ci_trigger {
 enum {
 #undef CI_EFFECT
 #define CI_EFFECT(_name, _type, _color, _ms, _arg) FX_##_name,
+#undef CI_EFFECTX
+#define CI_EFFECTX(_name, _type, _color, _ms, ...) FX_##_name,
     CI_EFFECTS
         FX_BASE_COUNT
 };
@@ -301,6 +329,8 @@ enum {
 static struct ci_fx_def fx_defs[] = {
 #undef CI_EFFECT
 #define CI_EFFECT(_name, _type, _color, _ms, _arg) {_type, _color, _ms, _arg},
+#undef CI_EFFECTX
+#define CI_EFFECTX(_name, _type, _color, _ms, ...) {.type = _type, .color = _color, .duration_ms = _ms, __VA_ARGS__},
     CI_EFFECTS
 #undef CI_MIX
 #define CI_MIX(_name, ...) [FX_##_name] = {CI_FX_MIX, 0, 0, FX_##_name - FX_BASE_COUNT},
@@ -309,6 +339,8 @@ static struct ci_fx_def fx_defs[] = {
 static const char *const fx_names[] = {
 #undef CI_EFFECT
 #define CI_EFFECT(_name, _type, _color, _ms, _arg) #_name,
+#undef CI_EFFECTX
+#define CI_EFFECTX(_name, _type, _color, _ms, ...) #_name,
     CI_EFFECTS
 #undef CI_MIX
 #define CI_MIX(_name, ...) [FX_##_name] = #_name,
@@ -655,6 +687,8 @@ static void fx_start(uint8_t id, uint8_t origin_pos, uint32_t seed) {
     pos_xy(origin_pos, &fx_slots[slot].ox, &fx_slots[slot].oy);
 }
 
+#include "keyfx_fx_motion.h"
+
 /* Returns the brightness (0-255) of effect `f` at LED `led`, `t` ms after it started. */
 static uint32_t fx_level(const struct ci_fx_def *d, const struct fx_inst *f, int led, int32_t t) {
     int32_t dur = d->duration_ms;
@@ -731,13 +765,11 @@ static uint32_t fx_level(const struct ci_fx_def *d, const struct fx_inst *f, int
     case CI_FX_FLASH:
         return 255 - (255 * t) / dur;
     default:
-        return 0;
+        return fx_motion_level(d, f, led, t);
     }
 }
 
 /* colour of an effect at an LED: plain, rainbow, or a left-to-right gradient */
-static int16_t lx_min, lx_max;
-
 static uint32_t fx_color(uint32_t c, uint32_t c2, int led, int32_t t) {
     if (c == CI_RAINBOW) {
         struct led_rgb h = hue_rgb((lx[led] * 2 + t / 5) % 360);
@@ -799,9 +831,12 @@ static uint16_t part_len(const struct ci_part *p, int32_t ref_dur) {
 
 static void mixes_init(void) {
     lx_min = lx_max = lx[0];
+    ly_min = ly_max = ly[0];
     for (int i = 0; i < CI_N; i++) {
         lx_min = MIN(lx_min, lx[i]);
         lx_max = MAX(lx_max, lx[i]);
+        ly_min = MIN(ly_min, ly[i]);
+        ly_max = MAX(ly_max, ly[i]);
     }
     for (int m = 0; m < FX_COUNT - FX_BASE_COUNT; m++) {
         uint32_t total = 0;
