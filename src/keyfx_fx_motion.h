@@ -207,14 +207,14 @@ static void path_pt(const struct ci_fx_def *d, const struct mv *m, int32_t q, in
 }
 
 static uint32_t comet_level(const struct ci_fx_def *d, int led, int32_t t, const struct mv *m) {
-    const int K = 10;
+    const int NTRAIL = 10;
     int32_t trail = ((d->size ? d->size : 25) * 1024) / 100;
     int32_t head = (fx_prog(d, t) * (1024 + trail)) >> 10;
     int32_t width = d->width ? d->width : 14;
     uint32_t best = 0;
 
-    for (int j = 0; j < K; j++) {
-        int32_t pj = head - (j * trail) / K;
+    for (int j = 0; j < NTRAIL; j++) {
+        int32_t pj = head - (j * trail) / NTRAIL;
         int32_t x, y;
 
         if (pj < 0) {
@@ -230,7 +230,7 @@ static uint32_t comet_level(const struct ci_fx_def *d, int led, int32_t t, const
             continue;
         }
         uint32_t spatial = (255 * (uint32_t)(width - (int32_t)isqrt32((uint32_t)d2))) / width;
-        uint32_t v = (spatial * (uint32_t)(K - j)) / K;
+        uint32_t v = (spatial * (uint32_t)(NTRAIL - j)) / NTRAIL;
 
         best = MAX(best, v);
     }
