@@ -9,7 +9,7 @@ is set in one file, `config/keyfx_config.h`.
 | Feature | What you see |
 |---|---|
 | Indicators | Caps Lock, Num Lock off, active layer, modifiers (incl. sticky), Caps Word, Bluetooth profile |
-| Effects | ripple, wave, rain, bloom, flash, keystroke splash |
+| Effects | ripple, wave, rain, bloom, flash, keystroke splash, plus laser beams, snake, spiral, bouncing ball, lightning, swipe and Matrix rain |
 | Effects tied to real actions | a combo, macro, tap dance or key binding plays an effect, no keymap edits |
 | Held-key lights | hold a key and other keys light up (optionally after a delay) |
 | Leader-key lights | press the leader key and every key of every sequence lights; the lights narrow as you type |
@@ -128,11 +128,12 @@ The file is split into numbered sections. Everything is commented in place.
 | 1 | General settings | brightness, breathing/blink speed, colours |
 | 2 | Geometry | which LED sits under which key position (`CI_KEYS`) and the extra LEDs |
 | 3 | Indicator rules | `CI_RULE(...)` and `CI_HELD_RULE(...)` |
-| 4 | Effects | named effects you can play (`CI_EFFECTS`) |
-| 5 | Splash styles | what a keystroke splash looks like |
-| 6 | Effects on actions | `CI_ACTIONS`: combo/macro/binding → effect |
-| 7 | Leader key lights | `CI_LEADERS`, `CI_LEADER_SEQS` |
-| 8 | Position triggers | `CI_TRIGGERS` (older, prefer section 6) |
+| 4 | Effects | named effects (`CI_EFFECTS`): classic ones and the motion effects below |
+| 5 | Effect mixer | `CI_MIXES`: combine effects |
+| 6 | Splash styles | what a keystroke splash looks like |
+| 7 | Actions | `CI_ACTIONS`: combo/macro/binding → effect |
+| 8 | Leader key lights | `CI_LEADERS`, `CI_LEADER_SEQS`, `CI_LEADER_KEYS` |
+| 9 | Position triggers | `CI_TRIGGERS` (older, prefer section 7) |
 
 ### Indicator rule
 
@@ -148,7 +149,10 @@ CI_RULE(CI_LAYER,   1, CI_YELLOW, CI_ANIM_BREATHE, CI_ALWAYS, 2, 3, 4)
 Sources: `CI_CAPS_ON`, `CI_NUM_OFF`, `CI_NUM_ON`, `CI_LAYER`, `CI_MOD`, `CI_CAPS_WORD`,
 `CI_BT_CONNECTED`, `CI_BT_SEARCHING`, `CI_SPLASH_ON`.
 Animations: `CI_ANIM_SOLID`, `CI_ANIM_BREATHE`, `CI_ANIM_BLINK`.
-`layer` limits the rule to when that layer is active; `CI_ALWAYS` means no limit.
+The layer field limits the rule:
+- `CI_ALWAYS`: every layer.
+- a number `n`: lit whenever layer `n` is active. The base layer is always active, so a rule for layer 0 lights on every layer.
+- `CI_ONLY(n)`: lit only while layer `n` is the highest active layer. Use it to put the same indicator on different keys on each layer.
 
 ### Per-rule settings, fades and gradients
 
@@ -168,6 +172,59 @@ CI_RULEX(CI_LAYER, 1, CI_RED, CI_ANIM_BREATHE, CI_ALWAYS,
 | `.color2`, `.color3` | more colours: the listed keys blend from `colour` to `.color2` (to `.color3`), in the order you list them |
 
 Use `CI_RAINBOW` as the colour for a moving rainbow along the keys. Options you leave out use the general settings.
+
+### Motion effects (beam, snake, spiral, ball, lightning, swipe, matrix)
+
+Written with `CI_EFFECTX(NAME, type, colour, duration_ms, .option = value, ...)` inside `CI_EFFECTS`. All options are optional. Directions are degrees (0 right, 90 down, 180 left, 270 up); distances and sizes are tenths of a key pitch; keys are written `CI_AT(position)`.
+
+| Type | What it does |
+|---|---|
+| `CI_FX_BEAM` | laser shot(s) from a key; `.count` + `.spread` make a fan (e.g. 3 shots over 90°); `.invert` converges back |
+| `CI_FX_SNAKE` | a wiggling trail from `.from` to `.to` |
+| `CI_FX_SPIRAL` | a trail spiralling out from a key; `.invert` spirals in |
+| `CI_FX_BALL` | a ball dropped from a key that bounces away |
+| `CI_FX_LIGHTNING` | a jagged bolt with random brightness and flicker; `.random` picks a new direction each time |
+| `CI_FX_SWIPE` | a wall of light in any direction; `.bidir` spreads both ways, `.invert` contracts, `.fill` leaves the passed keys lit |
+| `CI_FX_MATRIX` | falling columns with a shimmering shine; `.count` = % of columns |
+
+| Option | Meaning |
+|---|---|
+| `.from`, `.to` | start key and end key (the end key sets direction and distance) |
+| `.angle`, `.dist` | direction and distance when no `.to` is given |
+| `.count`, `.spread` | number of shots / bolts / % of columns; degrees covered by a fan |
+| `.size`, `.width` | trail length (% of the path) and thickness |
+| `.wiggle`, `.turns`, `.height`, `.bounce` | snake/bolt sideways amount, spiral turns, ball drop height, ball bounciness (%) |
+| `.accel` | -100..100: + starts slow and ends fast, - the opposite |
+| `.invert`, `.random`, `.bidir`, `.fill` | 1 = on |
+
+Without `.from` an effect starts at the key that triggered it. Motion effects can be used in mixes, actions, the leader lights and splash styles like any other effect.
+
+### Effect mixer
+
+`CI_MIXES` builds a new effect out of the ones in section 4. Parts run together, or one after another
+with `.start_ms`, and each has its own timing, look and speed:
+
+```
+#define CI_MIXES \
+    CI_MIX(CELEBRATE, \
+        CI_PART(KEY_RIPPLE, .fade_out_ms = 400) \
+        CI_PART(UNLOCK, .start_ms = 500, .speed = 140, .accel = -30, .color = CI_CYAN, .color2 = CI_PINK) \
+        CI_PART(KEY_BLOOM, .start_ms = 900, .pulse_ms = 200, .repeat = 2, .pause_ms = 200))
+```
+
+Use it like any effect, for example `CI_ON_COMBO_NAME(CELEBRATE, logoff)`.
+
+| Option | Meaning |
+|---|---|
+| `.start_ms` | wait before the part starts (a pause, or a sequence) |
+| `.duration_ms` | play the effect over this long instead of its own time |
+| `.speed`, `.accel` | speed in percent; `.accel` is the change per second (+ faster, - slower) |
+| `.brightness` | percent of the effect's brightness |
+| `.fade_in_ms`, `.fade_out_ms` | fade the part in and out |
+| `.pulse_ms`, `.breathe_ms` | flash or breathe while the part plays |
+| `.repeat`, `.pause_ms` | repeat it, with a pause between |
+| `.origin` | `CI_AT(position)`: start from another key |
+| `.color`, `.color2` | change the colour; with both, a left-to-right gradient |
 
 ### Held-key lights
 
