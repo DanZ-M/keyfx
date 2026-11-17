@@ -69,6 +69,7 @@ enum ci_source {
 enum ci_anim { CI_ANIM_SOLID = 0, CI_ANIM_BREATHE, CI_ANIM_BLINK };
 
 #define CI_ALWAYS 0xFF /* "when" value: rule is not tied to a layer */
+#define CI_ONLY(_n) (0x40 | (_n)) /* "when" value: only while layer _n is the highest active one */
 
 /* HID modifier masks for CI_MOD */
 #define CI_MOD_CTRL 0x11
@@ -910,8 +911,14 @@ static bool paint_effects(int64_t now) {
 static bool rule_active(const struct ci_rule *r, int held_idx) {
     uint8_t profile = (st_flags >> ST_PROFILE_SHIFT) & 0x7;
 
-    if (r->when != CI_ALWAYS && !(st_layers & BIT(r->when & 7))) {
-        return false;
+    if (r->when != CI_ALWAYS) {
+        if (r->when & 0x40) { /* CI_ONLY: that layer must be the top one */
+            if (!st_layers || (31 - __builtin_clz((unsigned)st_layers)) != (r->when & 7)) {
+                return false;
+            }
+        } else if (!(st_layers & BIT(r->when & 7))) {
+            return false;
+        }
     }
 
     switch (r->src) {
