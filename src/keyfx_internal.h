@@ -24,3 +24,8 @@ struct zmk_behavior_binding_event;
 /* Central only: called for every behavior ZMK runs (through the link-time hook). */
 void keyfx_on_binding(const struct zmk_behavior_binding *binding,
                      const struct zmk_behavior_binding_event *event);
+
+/* Central only: starts the bootloader light effect when `binding` is &bootloader and returns
+ * how long (ms) the reboot should wait; 0 = not the bootloader, run it at once. */
+uint32_t keyfx_boot_check(const struct zmk_behavior_binding *binding,
+                          const struct zmk_behavior_binding_event *event);

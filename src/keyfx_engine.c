@@ -163,6 +163,15 @@ struct ci_fx_def {
     uint8_t count_max;  /* up to this % of columns (.count = the least)             */
     uint8_t speed_min, speed_max; /* fall speed per column, percent (70..130)       */
     uint8_t flicker; /* flicker strength percent (default 40)                       */
+    /* all motion effects */
+    uint32_t color2; /* middle colour of the trail (colour .. color2 .. head)        */
+    uint8_t loops;   /* repeat the movement this many times within the duration      */
+    bool pingpong;   /* every second loop runs backwards (spiral out, spiral in)     */
+    uint16_t breathe_ms; /* swell and dim with this period                           */
+    uint8_t margin;  /* keep this many keys away from the edges                      */
+    uint16_t aspect; /* spiral: width in percent of its height (100 = circle)        */
+    bool center;     /* start in the middle of the keyboard                          */
+    bool nofade;     /* do not fade out at the end (last frame stays)                */
 };
 
 /* one part of a mix: an existing effect with its own timing and look (see CI_MIXES) */
@@ -308,6 +317,13 @@ struct ci_trigger {
 
 #ifndef CI_ACTIONS
 #define CI_ACTIONS
+#endif
+
+#ifndef CI_BOOTLOADER_FX
+#define CI_BOOTLOADER_FX FX_NONE /* effect shown just before &bootloader reboots a half */
+#endif
+#ifndef CI_BOOTLOADER_DELAY_MS
+#define CI_BOOTLOADER_DELAY_MS 0 /* 0 = the length of the effect */
 #endif
 
 #ifndef CI_MIXES
@@ -798,18 +814,26 @@ static uint32_t fx_color(uint32_t c, uint32_t c2, int led, int32_t t) {
 }
 
 /* blend an effect colour towards the head colour (matrix) by m/255 */
-static uint32_t fx_head(uint32_t c, uint32_t head, uint32_t m) {
+static uint32_t blend_rgb(uint32_t c, uint32_t e, uint32_t m) {
     uint32_t out = 0;
 
-    if (!head || !m) {
-        return c;
-    }
     for (int sh = 16; sh >= 0; sh -= 8) {
-        uint32_t x = (c >> sh) & 0xFF, y = (head >> sh) & 0xFF;
+        uint32_t x = (c >> sh) & 0xFF, y = (e >> sh) & 0xFF;
 
         out |= ((x * (255 - m) + y * m) / 255) << sh;
     }
     return out;
+}
+
+/* colour .. .color2 .. .head along the trail: m = 0 at the tail end, 255 at the head */
+static uint32_t fx_head(const struct ci_fx_def *d, uint32_t c, uint32_t m) {
+    if ((!d->head && !d->color2) || !m) {
+        return c;
+    }
+    uint32_t mid = d->color2 ? d->color2 : c;
+    uint32_t hd = d->head ? d->head : mid;
+
+    return m < 128 ? blend_rgb(c, mid, m * 2) : blend_rgb(mid, hd, (m - 128) * 2);
 }
 
 static void fx_add(int led, uint32_t lvl, uint32_t color, uint32_t pct) {
@@ -852,6 +876,18 @@ static uint16_t part_len(const struct ci_part *p, int32_t ref_dur) {
 static void mixes_init(void) {
     lx_min = lx_max = lx[0];
     ly_min = ly_max = ly[0];
+    kx_min = ky_min = INT16_MAX;
+    kx_max = ky_max = INT16_MIN;
+    for (size_t p = 0; p < CI_POSITIONS; p++) {
+        kx_min = MIN(kx_min, geo_keys[p].x);
+        kx_max = MAX(kx_max, geo_keys[p].x);
+        ky_min = MIN(ky_min, geo_keys[p].y);
+        ky_max = MAX(ky_max, geo_keys[p].y);
+        if (geo_keys[p].x >= 0 && geo_keys[p].y >= 0 && geo_keys[p].x / 10 < SN_COLS &&
+            geo_keys[p].y / 10 < SN_ROWS) {
+            kgrid[geo_keys[p].y / 10][geo_keys[p].x / 10] = 1;
+        }
+    }
     for (int i = 0; i < CI_N; i++) {
         lx_min = MIN(lx_min, lx[i]);
         lx_max = MAX(lx_max, lx[i]);
@@ -920,7 +956,7 @@ static void paint_mix(const struct ci_fx_def *d, const struct fx_inst *f, int32_
             uint32_t lvl = (fx_level(rd, &pf, led, u) * env) / 255;
 
             if (lvl) {
-                fx_add(led, lvl, fx_head(fx_color(color, p->color2, led, u), rd->head, fx_head_mix), pct);
+                fx_add(led, lvl, fx_head(rd, fx_color(color, p->color2, led, u), fx_head_mix), pct);
             }
         }
     }
@@ -954,7 +990,7 @@ static bool paint_effects(int64_t now) {
             uint32_t lvl = fx_level(d, f, led, t);
 
             if (lvl) {
-                fx_add(led, lvl, fx_head(fx_color(d->color, 0, led, t), d->head, fx_head_mix),
+                fx_add(led, lvl, fx_head(d, fx_color(d->color, 0, led, t), fx_head_mix),
                        CI_FX_BRIGHTNESS_PERCENT);
             }
         }
@@ -1508,6 +1544,24 @@ void keyfx_on_binding(const struct zmk_behavior_binding *b,
             k_work_submit(&act_work);
         }
     }
+}
+
+/* &bootloader: show the effect first, then reboot. Returns how long to wait (ms), or 0 when
+ * this binding is not the bootloader (or the feature is off). */
+uint32_t keyfx_boot_check(const struct zmk_behavior_binding *b,
+                          const struct zmk_behavior_binding_event *ev) {
+#if DT_NODE_EXISTS(DT_NODELABEL(bootloader))
+    static const char boot_name[] = DEVICE_DT_NAME(DT_NODELABEL(bootloader));
+
+    if (CI_BOOTLOADER_FX == FX_NONE || !b->behavior_dev ||
+        strcmp(b->behavior_dev, boot_name) != 0) {
+        return 0;
+    }
+    trigger_fx(CI_BOOTLOADER_FX, ev->position < CI_POSITIONS ? ev->position : 0);
+    return CI_BOOTLOADER_DELAY_MS ? CI_BOOTLOADER_DELAY_MS : fx_defs[CI_BOOTLOADER_FX].duration_ms;
+#else
+    return 0;
+#endif
 }
 
 void keyfx_play_by_name(const char *name, uint8_t origin_pos) {

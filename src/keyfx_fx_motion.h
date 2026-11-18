@@ -9,6 +9,8 @@
  */
 
 static int16_t lx_min, lx_max, ly_min, ly_max;
+static int16_t kx_min, kx_max, ky_min, ky_max; /* the keys only (not the back LEDs) */
+static uint32_t fx_head_mix; /* 0 = effect colour .. 255 = head colour, set while painting */
 #define ABSV(v) ((v) < 0 ? -(v) : (v))
 
 /* ---- small maths ---- */
@@ -56,6 +58,9 @@ static int32_t fx_prog(const struct ci_fx_def *d, int32_t t) {
 
 /* fade out during the last tenth of the effect */
 static uint32_t fx_tail(const struct ci_fx_def *d, int32_t t) {
+    if (d->nofade) {
+        return 255;
+    }
     int32_t left = d->duration_ms - t;
     int32_t span = d->duration_ms / 10;
 
@@ -66,7 +71,10 @@ static uint32_t fx_tail(const struct ci_fx_def *d, int32_t t) {
 
 static void fx_start_pt(const struct ci_fx_def *d, const struct fx_inst *f, int32_t *x,
                         int32_t *y) {
-    if (d->from) {
+    if (!d->from && d->center) { /* the middle of the keys */
+        *x = (kx_min + kx_max) / 2;
+        *y = (ky_min + ky_max) / 2;
+    } else if (d->from) {
         int16_t px, py;
 
         pos_xy(d->from - 1, &px, &py);
@@ -172,6 +180,7 @@ static int32_t ball_height(const struct ci_fx_def *d, int32_t q, int32_t h0) {
 
 static void path_pt(const struct ci_fx_def *d, const struct mv *m, int32_t q, int32_t *x,
                     int32_t *y) {
+    int32_t asp = d->aspect ? d->aspect : 100; /* spiral: >100 stretches it sideways */
     int32_t cx = cos1024(m->ang), cy = sin1024(m->ang);
 
     switch (d->type) {
@@ -180,11 +189,12 @@ static void path_pt(const struct ci_fx_def *d, const struct mv *m, int32_t q, in
         int32_t r = (m->dist * q) >> 10;
         int32_t phi = m->ang + (turns * 360 * q) / 1024;
 
-        *x = m->sx + (r * cos1024(phi)) / 1024;
+        *x = m->sx + (((r * cos1024(phi)) / 1024) * asp) / 100;
         *y = m->sy + (r * sin1024(phi)) / 1024;
         return;
     }
     case CI_FX_BALL: {
+        asp = 100;
         int32_t h0 = d->height ? d->height : 60;
         int32_t floor = m->sy + h0;
 
@@ -206,8 +216,9 @@ static void path_pt(const struct ci_fx_def *d, const struct mv *m, int32_t q, in
     }
 }
 
-static uint32_t comet_level(const struct ci_fx_def *d, int led, int32_t t, const struct mv *m) {
-    const int NTRAIL = 10;
+static uint32_t comet_level(const struct ci_fx_def *d, int led, int32_t t, const struct mv *m,
+                            uint32_t *mix) {
+    const int NTRAIL = 16;
     int32_t trail = ((d->size ? d->size : 25) * 1024) / 100;
     int32_t head = (fx_prog(d, t) * (1024 + trail)) >> 10;
     int32_t width = d->width ? d->width : 14;
@@ -232,7 +243,10 @@ static uint32_t comet_level(const struct ci_fx_def *d, int led, int32_t t, const
         uint32_t spatial = (255 * (uint32_t)(width - (int32_t)isqrt32((uint32_t)d2))) / width;
         uint32_t v = (spatial * (uint32_t)(NTRAIL - j)) / NTRAIL;
 
-        best = MAX(best, v);
+        if (v > best) {
+            best = v;
+            *mix = (255 * (uint32_t)(NTRAIL - j)) / NTRAIL; /* 255 at the head, less along the tail */
+        }
     }
     return (best * fx_tail(d, t)) / 255;
 }
@@ -241,6 +255,7 @@ static uint32_t comet_level(const struct ci_fx_def *d, int led, int32_t t, const
 static uint32_t comet_fx(const struct ci_fx_def *d, const struct fx_inst *f, int led, int32_t t) {
     struct mv m;
     int32_t shots = (d->type == CI_FX_BEAM && d->count > 1) ? d->count : 1;
+    uint32_t mix = 0, bmix = 0;
     int32_t base, dflt = (d->type == CI_FX_SPIRAL) ? 70 : 140;
     uint32_t best = 0;
 
@@ -252,8 +267,14 @@ static uint32_t comet_fx(const struct ci_fx_def *d, const struct fx_inst *f, int
     }
     for (int32_t k = 0; k < shots; k++) {
         m.ang = shot_angle(d, base, k);
-        best = MAX(best, comet_level(d, led, t, &m));
+        uint32_t v = comet_level(d, led, t, &m, &mix);
+
+        if (v > best) {
+            best = v;
+            bmix = mix;
+        }
     }
+    fx_head_mix = bmix;
     return best;
 }
 
@@ -365,9 +386,6 @@ static uint32_t swipe_fx(const struct ci_fx_def *d, const struct fx_inst *f, int
 
 /* ---- matrix: columns of falling light with a flickering shine ---- */
 
-/* Matrix: how much of the head colour (.head) an LED shows, 0..255 (set by matrix_fx) */
-static uint32_t fx_head_mix;
-
 static uint32_t matrix_fx(const struct ci_fx_def *d, const struct fx_inst *f, int led, int32_t t) {
     int32_t ang = d->random ? (int32_t)(hash32(f->seed) % 360) : (d->angle ? d->angle : 90);
     int32_t cx = cos1024(ang), cy = sin1024(ang);
@@ -430,14 +448,145 @@ static uint32_t matrix_fx(const struct ci_fx_def *d, const struct fx_inst *f, in
     return (((lvl * shine) / 255) * fx_tail(d, t)) / 255;
 }
 
-static uint32_t fx_motion_level(const struct ci_fx_def *d, const struct fx_inst *f, int led,
-                                int32_t t) {
+/* ---- snake: one key wide, walking the key grid like the game ---- */
+
+#define SN_COLS 16
+#define SN_ROWS 8
+#define SN_MAXSTEPS 64
+static uint8_t kgrid[SN_ROWS][SN_COLS]; /* 1 where a key is */
+
+static bool cell_ok(const struct ci_fx_def *d, int c, int r) {
+    int32_t m = d->margin * 10;
+
+    if (c < 0 || r < 0 || c >= SN_COLS || r >= SN_ROWS || !kgrid[r][c]) {
+        return false;
+    }
+    return c * 10 >= kx_min + m && c * 10 <= kx_max - m && r * 10 >= ky_min + m &&
+           r * 10 <= ky_max - m;
+}
+
+/* The walk of one snake: the same every time for one start (seeded by the effect start). */
+static int snake_path(const struct ci_fx_def *d, const struct fx_inst *f, uint8_t *pc, uint8_t *pr) {
+    static const int8_t DX[4] = {1, 0, -1, 0}, DY[4] = {0, 1, 0, -1};
+    int32_t sx, sy;
+    int steps = CLAMP(d->count ? d->count : 14, 2, SN_MAXSTEPS - 1);
+    int len = CLAMP(d->size ? d->size : 4, 1, 20);
+    int rnd = d->wiggle ? MIN(d->wiggle, 100) : 30; /* % chance of turning / wandering */
+    int tc = -1, tr = -1, n = 1, dir;
+
+    fx_start_pt(d, f, &sx, &sy);
+    /* with a margin the snake lives in the inner keys: start and end are moved inside */
+    int c0 = (kx_min + d->margin * 10) / 10, c1 = (kx_max - d->margin * 10) / 10;
+    int r0 = (ky_min + d->margin * 10) / 10, r1 = (ky_max - d->margin * 10) / 10;
+
+    pc[0] = (uint8_t)CLAMP((sx + 5) / 10, c0, MAX(c0, c1));
+    pr[0] = (uint8_t)CLAMP((sy + 5) / 10, r0, MAX(r0, r1));
+    if (d->to) {
+        int16_t x, y;
+
+        pos_xy(d->to - 1, &x, &y);
+        tc = CLAMP((x + 5) / 10, c0, MAX(c0, c1));
+        tr = CLAMP((y + 5) / 10, r0, MAX(r0, r1));
+    }
+    dir = (int)(hash32(f->seed ^ 0x5A4Eu) % 4);
+
+    for (int i = 1; i <= steps; i++) {
+        int c = pc[n - 1], r = pr[n - 1];
+        uint32_t h = hash32(f->seed ^ (uint32_t)(i * 7919));
+        bool ok[4];
+        int nok = 0, pick = -1;
+
+        if (tc == c && tr == r) {
+            break; /* arrived */
+        }
+        for (int k = 0; k < 4; k++) {
+            ok[k] = cell_ok(d, c + DX[k], r + DY[k]) && k != ((dir + 2) & 3);
+            for (int b = MAX(0, n - len); b < n && ok[k]; b++) { /* do not bite its own tail */
+                ok[k] = !(pc[b] == c + DX[k] && pr[b] == r + DY[k]);
+            }
+            nok += ok[k];
+        }
+        if (!nok) {
+            for (int k = 0; k < 4; k++) { /* cornered: any way but back, even over its tail */
+                ok[k] = cell_ok(d, c + DX[k], r + DY[k]) && k != ((dir + 2) & 3);
+                nok += ok[k];
+            }
+        }
+        if (!nok) {
+            break;
+        }
+        bool wander = (int)(h % 100) < rnd;
+
+        if (tc >= 0 && !wander) { /* head for the end key: along the longer way first */
+            int dxs = tc - c, dys = tr - r;
+            int first = ABSV(dxs) >= ABSV(dys) ? (dxs > 0 ? 0 : 2) : (dys > 0 ? 1 : 3);
+            int second = ABSV(dxs) >= ABSV(dys) ? (dys > 0 ? 1 : 3) : (dxs > 0 ? 0 : 2);
+
+            if (dxs == 0 && ABSV(dys) >= 0) {
+                first = dys > 0 ? 1 : 3;
+            }
+            if (dys == 0) {
+                first = dxs > 0 ? 0 : 2;
+            }
+            pick = ok[first] ? first : (ok[second] && (dxs && dys) ? second : -1);
+        } else if (tc < 0 && !wander && ok[dir]) {
+            pick = dir; /* keep going straight */
+        }
+        if (pick < 0) {
+            int want = (int)((h >> 8) % (uint32_t)nok);
+
+            for (int k = 0; k < 4; k++) {
+                if (ok[k] && want-- == 0) {
+                    pick = k;
+                    break;
+                }
+            }
+        }
+        dir = pick;
+        pc[n] = (uint8_t)(c + DX[dir]);
+        pr[n] = (uint8_t)(r + DY[dir]);
+        n++;
+    }
+    return n;
+}
+
+static uint32_t snake_fx(const struct ci_fx_def *d, const struct fx_inst *f, int led, int32_t t) {
+    uint8_t pc[SN_MAXSTEPS], pr[SN_MAXSTEPS];
+    int n = snake_path(d, f, pc, pr);
+    int len = CLAMP(d->size ? d->size : 4, 1, 20);
+    int32_t total = n - 1 + len; /* the head walks, then the tail catches up */
+    int32_t hi = (fx_prog(d, t) * total) / 1024;
+    uint32_t best = 0;
+
+    if (ly[led] < 0 || lx[led] < 0) {
+        return 0;
+    }
+    int c = (lx[led] + 5) / 10, r = (ly[led] + 5) / 10;
+
+    for (int k = 0; k < n; k++) {
+        int age = hi - k;
+
+        if (pc[k] == c && pr[k] == r && age >= 0 && age < len) {
+            uint32_t v = (255 * (uint32_t)(len - age)) / (uint32_t)len;
+
+            if (v > best) {
+                best = v;
+                fx_head_mix = v; /* 255 at the head */
+            }
+        }
+    }
+    return (best * fx_tail(d, t)) / 255;
+}
+
+static uint32_t fx_motion_level_raw(const struct ci_fx_def *d, const struct fx_inst *f, int led,
+                                    int32_t t) {
     switch (d->type) {
     case CI_FX_BEAM:
-    case CI_FX_SNAKE:
     case CI_FX_SPIRAL:
     case CI_FX_BALL:
         return comet_fx(d, f, led, t);
+    case CI_FX_SNAKE:
+        return snake_fx(d, f, led, t);
     case CI_FX_LIGHTNING:
         return lightning_fx(d, f, led, t);
     case CI_FX_SWIPE:
@@ -448,3 +597,39 @@ static uint32_t fx_motion_level(const struct ci_fx_def *d, const struct fx_inst 
         return 0;
     }
 }
+
+/* Settings every motion effect shares: margin, loops (with ping-pong) and breathing. */
+static uint32_t fx_motion_level(const struct ci_fx_def *d, const struct fx_inst *f, int led,
+                                int32_t t) {
+    struct ci_fx_def dd = *d;
+    int32_t tl = t;
+
+    if (d->margin && d->type != CI_FX_SNAKE) { /* the snake keeps to the margin by itself */
+        int32_t m = d->margin * 10;
+
+        if (lx[led] < kx_min + m || lx[led] > kx_max - m || ly[led] < ky_min + m ||
+            ly[led] > ky_max - m) {
+            return 0;
+        }
+    }
+    if (d->loops > 1) {
+        int32_t per = d->duration_ms / d->loops;
+        int32_t n = per > 0 ? MIN(t / per, d->loops - 1) : 0;
+
+        if (per <= 0) {
+            return 0;
+        }
+        tl = t - n * per;
+        dd.duration_ms = (uint16_t)per;
+        if (d->pingpong && (n & 1)) {
+            dd.invert = !dd.invert;
+        }
+    }
+    uint32_t lvl = fx_motion_level_raw(&dd, f, led, tl);
+
+    if (lvl && d->breathe_ms >= 2) {
+        lvl = (lvl * anim_factor_p(CI_ANIM_BREATHE, t, d->breathe_ms)) / 255;
+    }
+    return lvl;
+}
+
