@@ -197,6 +197,8 @@ Written with `CI_EFFECTX(NAME, type, colour, duration_ms, .option = value, ...)`
 | `.accel` | -100..100: + starts slow and ends fast, - the opposite |
 | `.invert`, `.random`, `.bidir`, `.fill` | 1 = on |
 
+**Matrix options:** `.head` (colour of the leading light, e.g. `CI_WHITE` for a white wisp), `.count` and `.count_max` (fewest and most columns that rain, %; picked at random each time), `.speed_min` and `.speed_max` (each column falls at its own random speed, % of normal), `.dist` (trail length), `.flicker` (strength in %; grows toward the tail, each column at its own rate).
+
 Without `.from` an effect starts at the key that triggered it. Motion effects can be used in mixes, actions, the leader lights and splash styles like any other effect.
 
 ### Effect mixer

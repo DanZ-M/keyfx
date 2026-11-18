@@ -229,8 +229,22 @@
  *               ends slow (this is the acceleration / deceleration)
  *   .invert     1 = run the other way (converge / contract / inwards)         0
  *   .random     1 = a new random direction every time                         0
- *   .bidir      swipe only: 1 = spread both ways from the start               0
+ *   .bidir      swipe only: 1 = spread both ways from a vertical line. The line is the  0
+ *               middle between .from and .to (e.g. keys 38 and 39 = the middle of the
+ *               board), or the middle of the board when .from is not set. With .invert
+ *               the light closes in from both outer edges to that line.
  *   .fill       swipe only: 1 = leave what the wall passed lit                0
+ *
+ *   Matrix only (CI_FX_MATRIX):
+ *   .head       colour of the leading light of each column, e.g. CI_WHITE for a      none
+ *               white wisp with the main colour as its trail
+ *   .count      fewest columns that rain, % (random between .count and .count_max)   60
+ *   .count_max  most columns that rain, % (chosen again at every start)             = .count
+ *   .speed_min, .speed_max   every column falls at its own random speed in this     70, 130
+ *               range, percent of normal (100 = normal)
+ *   .dist       length of the trail, tenths of a key                                 45
+ *   .flicker    flicker strength, % (0 = steady). It grows toward the tail of        40
+ *               each column and every column flickers at its own rate
  *
  *   Examples (all in the list below):
  *     a laser fired from key 5 to the lower left, 3 shots fanning over 90 degrees
@@ -257,8 +271,9 @@
 	CI_EFFECTX(BALL,    CI_FX_BALL,      CI_YELLOW, 2200, .height = 50, .bounce = 60, .dist = 120) \
 	CI_EFFECTX(BOLT,    CI_FX_LIGHTNING, CI_WHITE,  700,  .angle = 90, .dist = 40, .wiggle = 10) \
 	CI_EFFECTX(SWIPE,   CI_FX_SWIPE,     CI_BLUE,   1200, .angle = 0, .fill = 1) \
-	CI_EFFECTX(SQUEEZE, CI_FX_SWIPE,     CI_PURPLE, 1200, .from = CI_AT(5), .bidir = 1, .invert = 1) \
-	CI_EFFECTX(MATRIX,  CI_FX_MATRIX,    CI_GREEN,  3000, .angle = 90, .count = 70)
+	CI_EFFECTX(SQUEEZE, CI_FX_SWIPE,     CI_PURPLE, 1200, .from = CI_AT(38), .to = CI_AT(39), .bidir = 1, .invert = 1) \
+	CI_EFFECTX(MATRIX,  CI_FX_MATRIX,    CI_GREEN,  3000, .angle = 90, .head = CI_WHITE, .count = 40, .count_max = 80, \
+		.speed_min = 60, .speed_max = 140, .dist = 50, .flicker = 55)
 
 
 /* ===========================================================================
