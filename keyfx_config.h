@@ -197,7 +197,9 @@
  *   CI_FX_BEAM       laser: a bright head with a trail shot from a key. Several shots can fan
  *                    out (.count / .spread). .invert makes the shots travel back to the start
  *                    (converging).
- *   CI_FX_SNAKE      a wiggling trail travelling from the start key to the end key.
+ *   CI_FX_SNAKE      the snake game: exactly one key wide, it walks the key grid one key at a
+ *                    time (right, left, up, down - never diagonally), turning at random. With
+ *                    .to it wanders towards the end key and stops there.
  *   CI_FX_SPIRAL     a trail spiralling outwards from the start key; .invert spirals inwards.
  *   CI_FX_BALL       a ball dropped from the start key that bounces away along the board,
  *                    parabola by parabola, losing height each bounce.
@@ -216,12 +218,15 @@
  *                                                                             90, matrix 90)
  *   .dist       distance or radius                                            automatic
  *   .count      beam: number of shots   lightning: number of bolts            1
+ *               snake: number of steps it walks                                14
  *               matrix: % of columns that rain                                60
  *   .spread     beam: degrees covered by the fan of shots, centred on .angle  0
- *   .size       trail length in % of the path                                 25
+ *   .size       trail length: % of the path (beam, spiral, ball); number of KEYS
+ *               for the snake                                                 25 / snake 4
  *   .width      thickness of the beam / bolt / wall                           beam 14,
  *                                                                             bolt 7, wall 18
- *   .wiggle     snake / lightning: sideways amount                            snake 8, bolt 20
+ *   .wiggle     lightning: sideways amount                                    20
+ *               snake: % chance of turning or wandering at each step          30
  *   .turns      spiral: number of turns                                       2
  *   .height     ball: height it is dropped from                               60
  *   .bounce     ball: bounciness, % of the height kept after each bounce      60
@@ -235,9 +240,26 @@
  *               the light closes in from both outer edges to that line.
  *   .fill       swipe only: 1 = leave what the wall passed lit                0
  *
+ *   For ALL motion effects:
+ *   .margin     keep this many keys away from the edges: lights outside the inner      0
+ *               area stay dark and the snake does not walk there. Rows and columns
+ *               are counted in keys (1 = skip the outer ring of keys and the back
+ *               LEDs). Example: .margin = 1 on this board leaves 10 columns x 2 rows.
+ *   .loops      repeat the movement this many times within the duration                1
+ *   .pingpong   1 = every second loop runs backwards (a spiral that goes out, then in) 0
+ *   .breathe_ms swell and dim with this period (ms)                                    off
+ *   .nofade     1 = do not fade out at the end (the last frame stays)                  0
+ *   .head       colour of the leading light; .color2 the middle of the trail. The      none
+ *               trail runs colour -> .color2 -> .head, e.g. orange, yellow, white.
+ *               (beam, snake, spiral, ball and matrix)
+ *   .center     1 = start in the middle of the keys instead of at a key                0
+ *   .aspect     spiral: width in % of its height. Boards are wider than tall, so       100
+ *               150-250 makes the spiral an ellipse that fills the keyboard.
+ *   Tip: to light exactly one key at a time use .width = 6 (the lit area is then
+ *   smaller than the 10 units between keys); the snake is always one key.
+ *
  *   Matrix only (CI_FX_MATRIX):
- *   .head       colour of the leading light of each column, e.g. CI_WHITE for a      none
- *               white wisp with the main colour as its trail
+ *   (.head, above, is the white wisp: .head = CI_WHITE)
  *   .count      fewest columns that rain, % (random between .count and .count_max)   60
  *   .count_max  most columns that rain, % (chosen again at every start)             = .count
  *   .speed_min, .speed_max   every column falls at its own random speed in this     70, 130
@@ -251,6 +273,21 @@
  *     CI_EFFECTX(LASER, CI_FX_BEAM, CI_RED, 900, .from = CI_AT(5), .angle = 225, .count = 3, .spread = 90, .accel = 40)
  *     a snake from key 12 to key 35
  *     CI_EFFECTX(SNAKE, CI_FX_SNAKE, CI_GREEN, 1500, .from = CI_AT(12), .to = CI_AT(35))
+ *
+ * THINGS TO CONSIDER WHEN CHOOSING SIZES (this board: 12 columns x 4 rows, keys 10 apart,
+ * so the keys span x = 0..110 and y = 0..30; the 12 back LEDs sit one row above, y = -10)
+ *   - Width / size: .width = 6 lights about one key; 14 (the beam default) about two to three
+ *     keys; 30 or more lights a whole block, and a width as big as the board (50+) makes the
+ *     effect look like a flash - you will not see it move. Likewise a trail (.size, .dist)
+ *     longer than the board never shows its head or tail.
+ *   - Speed: the effect crosses its distance in its duration. 10 keys in 600 ms is a blur;
+ *     in 1500-2500 ms you can follow it. A snake takes duration / steps per key.
+ *   - Height: the board is only 4 rows tall. Vertical beams, bolts and spirals have just
+ *     30 units to travel; use .aspect for spirals and .angle near 0 or 180 for beams.
+ *   - Distances are tenths of a key: .dist = 50 is five keys, .height = 30 is three rows.
+ *   - .margin = 0 (the default) means NO margin: the effect may use every key and the back
+ *     LEDs. .margin = 1 keeps one key away from every edge (and drops the back LEDs).
+ *   - A start key at an edge (e.g. position 0) with an angle pointing outwards shows nothing.
  *
  * Effects of both kinds go in the same list, and every line but the last ends with a backslash.
  * =========================================================================== */
@@ -266,8 +303,11 @@
 	CI_EFFECT(KWAIT,      CI_FX_BLOOM,  CI_BLUE,    6700, 90) \
 	/* ---- motion effects: samples, nothing uses them until you add them in sections 5-8 ---- */ \
 	CI_EFFECTX(LASER,   CI_FX_BEAM,      CI_RED,    900,  .angle = 90, .count = 3, .spread = 120, .accel = 40) \
-	CI_EFFECTX(SNAKE,   CI_FX_SNAKE,     CI_GREEN,  1500, .from = CI_AT(0), .to = CI_AT(35), .size = 30) \
+	CI_EFFECTX(SNAKE,   CI_FX_SNAKE,     CI_GREEN,  2500, .from = CI_AT(0), .to = CI_AT(35), .size = 4, .count = 16, .wiggle = 30, .head = CI_WHITE) \
 	CI_EFFECTX(SPIRAL,  CI_FX_SPIRAL,    CI_CYAN,   1500, .turns = 2) \
+	/* shown just before &bootloader reboots a half (see CI_BOOTLOADER_FX below): a spiral from the middle that loops in and out, breathing, orange - yellow - white */ \
+	CI_EFFECTX(BOOT,    CI_FX_SPIRAL,    CI_ORANGE, 2400, .center = 1, .dist = 40, .aspect = 150, .turns = 3, .size = 70, .width = 13, \
+		.color2 = CI_YELLOW, .head = CI_WHITE, .loops = 4, .pingpong = 1, .breathe_ms = 600, .nofade = 1) \
 	CI_EFFECTX(BALL,    CI_FX_BALL,      CI_YELLOW, 2200, .height = 50, .bounce = 60, .dist = 120) \
 	CI_EFFECTX(BOLT,    CI_FX_LIGHTNING, CI_WHITE,  700,  .angle = 90, .dist = 40, .wiggle = 10) \
 	CI_EFFECTX(SWIPE,   CI_FX_SWIPE,     CI_BLUE,   1200, .angle = 0, .fill = 1) \
@@ -353,6 +393,26 @@
 	CI_ON_BEHAVIOR(LASER, caps_word) \
 	CI_ON_BEHAVIOR(UNLOCK, SHUT) \
 	*/
+
+
+/* ---------------------------------------------------------------------------
+ * 7b. BOOTLOADER LIGHT
+ *
+ * When you press a key bound to &bootloader, the reboot is held back until this effect has
+ * played, so you SEE that the half is about to enter bootloader mode. Both halves play it,
+ * then the half you chose reboots. Works for &bootloader on a key, a hold-tap or a tap dance;
+ * it does not work for a combo that reboots (ZMK runs those on the left half).
+ *
+ * Note: once a half is in bootloader mode the firmware (and so this animation) is no longer
+ * running, so the animation cannot keep going inside the bootloader. The effect's last frame
+ * is kept (.nofade = 1) and may stay lit on the LEDs, depending on your board's LED power.
+ *
+ *   CI_BOOTLOADER_FX        the effect to play (FX_NONE = off, nothing is delayed)
+ *   CI_BOOTLOADER_DELAY_MS  how long to wait before rebooting (0 = the effect's length)
+ * ------------------------------------------------------------------------- */
+
+#define CI_BOOTLOADER_FX FX_BOOT
+/* #define CI_BOOTLOADER_DELAY_MS 2400 */
 
 
 /* ===========================================================================

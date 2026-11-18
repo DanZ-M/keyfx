@@ -201,6 +201,14 @@ Written with `CI_EFFECTX(NAME, type, colour, duration_ms, .option = value, ...)`
 
 Without `.from` an effect starts at the key that triggered it. Motion effects can be used in mixes, actions, the leader lights and splash styles like any other effect.
 
+**Snake:** one key wide, walks the key grid like the game (`.size` = length in keys, `.count` = steps, `.wiggle` = % chance to turn, `.to` = wander towards that key).
+
+**Options for all motion effects:** `.margin` (keep N keys from the edges), `.loops` and `.pingpong` (repeat; every second loop backwards), `.breathe_ms`, `.nofade`, `.head` and `.color2` (trail colour → `.color2` → `.head`), `.center` (start in the middle) and `.aspect` (spiral width in % of its height).
+
+### Bootloader light
+
+`#define CI_BOOTLOADER_FX FX_BOOT` plays the `BOOT` effect (a looping, breathing orange–yellow–white spiral) on both halves just before a key bound to `&bootloader` reboots its half. Once a half is in bootloader mode the firmware is not running any more, so the animation cannot continue there; the last frame is kept. Does not apply to combos.
+
 ### Effect mixer
 
 `CI_MIXES` builds a new effect out of the ones in section 4. Parts run together, or one after another
