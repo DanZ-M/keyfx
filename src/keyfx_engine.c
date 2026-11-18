@@ -158,6 +158,11 @@ struct ci_fx_def {
     bool random;    /* random direction every time                                  */
     bool bidir;     /* swipe: spread both ways from the start line                  */
     bool fill;      /* swipe: leave what the front passed lit until the end         */
+    /* matrix only */
+    uint32_t head;  /* colour of the leading light of every column (0 = none)       */
+    uint8_t count_max;  /* up to this % of columns (.count = the least)             */
+    uint8_t speed_min, speed_max; /* fall speed per column, percent (70..130)       */
+    uint8_t flicker; /* flicker strength percent (default 40)                       */
 };
 
 /* one part of a mix: an existing effect with its own timing and look (see CI_MIXES) */
@@ -792,6 +797,21 @@ static uint32_t fx_color(uint32_t c, uint32_t c2, int led, int32_t t) {
     return c;
 }
 
+/* blend an effect colour towards the head colour (matrix) by m/255 */
+static uint32_t fx_head(uint32_t c, uint32_t head, uint32_t m) {
+    uint32_t out = 0;
+
+    if (!head || !m) {
+        return c;
+    }
+    for (int sh = 16; sh >= 0; sh -= 8) {
+        uint32_t x = (c >> sh) & 0xFF, y = (head >> sh) & 0xFF;
+
+        out |= ((x * (255 - m) + y * m) / 255) << sh;
+    }
+    return out;
+}
+
 static void fx_add(int led, uint32_t lvl, uint32_t color, uint32_t pct) {
     struct led_rgb add = rgb_from(color, lvl, pct);
 
@@ -896,10 +916,11 @@ static void paint_mix(const struct ci_fx_def *d, const struct fx_inst *f, int32_
         uint32_t color = p->color ? p->color : rd->color;
 
         for (int led = 0; led < CI_N; led++) {
+            fx_head_mix = 0;
             uint32_t lvl = (fx_level(rd, &pf, led, u) * env) / 255;
 
             if (lvl) {
-                fx_add(led, lvl, fx_color(color, p->color2, led, u), pct);
+                fx_add(led, lvl, fx_head(fx_color(color, p->color2, led, u), rd->head, fx_head_mix), pct);
             }
         }
     }
@@ -929,10 +950,12 @@ static bool paint_effects(int64_t now) {
             continue;
         }
         for (int led = 0; led < CI_N; led++) {
+            fx_head_mix = 0;
             uint32_t lvl = fx_level(d, f, led, t);
 
             if (lvl) {
-                fx_add(led, lvl, fx_color(d->color, 0, led, t), CI_FX_BRIGHTNESS_PERCENT);
+                fx_add(led, lvl, fx_head(fx_color(d->color, 0, led, t), d->head, fx_head_mix),
+                       CI_FX_BRIGHTNESS_PERCENT);
             }
         }
     }

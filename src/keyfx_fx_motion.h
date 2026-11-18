@@ -306,8 +306,20 @@ static uint32_t lightning_fx(const struct ci_fx_def *d, const struct fx_inst *f,
 static uint32_t swipe_fx(const struct ci_fx_def *d, const struct fx_inst *f, int led, int32_t t) {
     int32_t sx, sy;
 
-    fx_start_pt(d, f, &sx, &sy);
-    int32_t ang = d->angle || d->to || d->random ? fx_base_angle(d, f, sx, sy) : 0;
+    if (d->bidir && d->from && d->to) { /* the line runs through the middle of the two keys */
+        int16_t ax, ay, bx, by;
+
+        pos_xy(d->from - 1, &ax, &ay);
+        pos_xy(d->to - 1, &bx, &by);
+        sx = (ax + bx) / 2;
+        sy = (ay + by) / 2;
+    } else if (d->bidir && !d->from) { /* no start key: the middle of the board */
+        sx = (lx_min + lx_max) / 2;
+        sy = (ly_min + ly_max) / 2;
+    } else {
+        fx_start_pt(d, f, &sx, &sy);
+    }
+    int32_t ang = d->bidir ? d->angle : (d->angle || d->to || d->random ? fx_base_angle(d, f, sx, sy) : 0);
     int32_t cx = cos1024(ang), cy = sin1024(ang);
     int32_t s = ((lx[led] - sx) * cx + (ly[led] - sy) * cy) / 1024; /* distance along the sweep */
     int32_t lo = 0, hi = 0;
@@ -322,14 +334,16 @@ static uint32_t swipe_fx(const struct ci_fx_def *d, const struct fx_inst *f, int
         lo = i ? MIN(lo, pr) : pr;
         hi = i ? MAX(hi, pr) : pr;
     }
-    if (d->dist || d->to) {
+    if (d->bidir) { /* both ways from the line: distance from the line, out to the far end */
+        s = ABSV(s);
+        hi = MAX(ABSV(hi), ABSV(lo));
+        if (d->dist) {
+            hi = d->dist;
+        }
+        lo = 0;
+    } else if (d->dist || d->to) {
         lo = 0;
         hi = fx_dist(d, sx, sy, hi);
-    }
-    if (d->bidir) { /* grows outwards in both directions from the start line */
-        s = ABSV(s);
-        lo = 0;
-        hi = MAX(ABSV(hi), ABSV(lo));
     }
     int32_t width = d->width ? d->width : 18;
     int32_t p = fx_prog(d, t);
@@ -351,49 +365,67 @@ static uint32_t swipe_fx(const struct ci_fx_def *d, const struct fx_inst *f, int
 
 /* ---- matrix: columns of falling light with a flickering shine ---- */
 
+/* Matrix: how much of the head colour (.head) an LED shows, 0..255 (set by matrix_fx) */
+static uint32_t fx_head_mix;
+
 static uint32_t matrix_fx(const struct ci_fx_def *d, const struct fx_inst *f, int led, int32_t t) {
-    int32_t ang = d->angle || d->random ? (d->random ? (int32_t)(hash32(f->seed) % 360) : d->angle) : 90;
+    int32_t ang = d->random ? (int32_t)(hash32(f->seed) % 360) : (d->angle ? d->angle : 90);
     int32_t cx = cos1024(ang), cy = sin1024(ang);
     int32_t along = (lx[led] * cx + ly[led] * cy) / 1024;
     int32_t perp = (-lx[led] * cy + ly[led] * cx) / 1024;
     int32_t col = (perp + 1000) / 10; /* one column per key pitch across the fall */
     uint32_t h = hash32((uint32_t)col * 2654435761u ^ f->seed);
-    int32_t density = d->count ? d->count : 60; /* percent of columns that rain */
+
+    /* how many columns rain: between .count and .count_max percent, chosen at every start */
+    int32_t dmin = d->count ? d->count : 60;
+    int32_t dmax = MAX(d->count_max, dmin);
+    int32_t density = dmin + (int32_t)(hash32(f->seed ^ 0xC01Du) % (uint32_t)(dmax - dmin + 1));
 
     if ((int32_t)(h % 100) >= density) {
         return 0;
     }
     int32_t dur = d->duration_ms;
     int32_t trail = d->dist ? d->dist : 45;
-    int32_t span = (lx_max - lx_min) + (ly_max - ly_min);
-    int32_t amin = -1000, amax = 1000, c;
-
-    /* range of `along` over the keyboard corners, relative to the same projection */
+    int32_t amin = 0, amax = 0;
     int32_t xs[4] = {lx_min, lx_max, lx_min, lx_max}, ys[4] = {ly_min, ly_min, ly_max, ly_max};
 
     for (int i = 0; i < 4; i++) {
-        c = (xs[i] * cx + ys[i] * cy) / 1024;
+        int32_t c = (xs[i] * cx + ys[i] * cy) / 1024;
+
         amin = (i == 0) ? c : MIN(amin, c);
         amax = (i == 0) ? c : MAX(amax, c);
     }
-    (void)span;
-    int32_t delay = (int32_t)((h >> 8) % (uint32_t)MAX((dur * 35) / 100, 1));
-    int32_t fall = (dur * 55) / 100;
-    int32_t speedmul = 80 + (int32_t)((h >> 16) % 50); /* each column falls at its own speed */
-    int32_t tt = ((t - delay) * speedmul) / 100;
+    /* every column falls at its own speed, between .speed_min and .speed_max percent */
+    int32_t smin = d->speed_min ? d->speed_min : 70;
+    int32_t smax = MAX(d->speed_max ? d->speed_max : 130, smin);
+    int32_t speed = smin + (int32_t)((h >> 16) % (uint32_t)(smax - smin + 1));
+    int32_t delay = (int32_t)((h >> 8) % (uint32_t)MAX((dur * 30) / 100, 1));
+    int32_t room = (dur * 90) / 100 - delay; /* time left for this column to fall */
+    int32_t fall = MIN(((dur * 55) / 100 * 100) / speed, room);
+    int32_t tt = t - delay;
 
-    if (tt < 0 || fall <= 0) {
+    if (tt < 0 || fall <= 0 || tt > fall) {
         return 0;
     }
-    int32_t head = amin + (((amax - amin) + trail) * (int32_t)MIN(tt, fall)) / fall;
+    int32_t head = amin + (((amax - amin) + trail) * tt) / fall;
     int32_t behind = head - along;
 
-    if (behind < 0 || behind > trail || tt > fall + dur / 10) {
+    if (behind < 0 || behind > trail) {
         return 0;
     }
     uint32_t lvl = (255 * (uint32_t)(trail - behind)) / trail;
-    /* the shine: each LED flickers on its own */
-    uint32_t shine = 110 + (hash32((uint32_t)led * 40503u ^ f->seed ^ (uint32_t)(t / 90)) % 146);
+
+    /* head colour: the leading light, fading into the trail colour */
+    fx_head_mix = 0;
+    if (d->head && behind < trail / 3) {
+        fx_head_mix = (255 * (uint32_t)(trail / 3 - behind)) / (uint32_t)(trail / 3);
+    }
+    /* flicker: stronger and faster the further it is from the head, its own rhythm per column */
+    int32_t fl = d->flicker ? d->flicker : 40;
+    int32_t eff = (fl * (30 + (70 * behind) / trail)) / 100;
+    int32_t period = 50 + (int32_t)((h >> 4) % 100);
+    uint32_t r = hash32((uint32_t)led * 40503u ^ f->seed ^ (uint32_t)((t + (int32_t)(h & 63)) / period)) % 101;
+    uint32_t shine = 255 - (uint32_t)((eff * (int32_t)r) / 100);
 
     return (((lvl * shine) / 255) * fx_tail(d, t)) / 255;
 }
