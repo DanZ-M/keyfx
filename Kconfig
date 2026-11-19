@@ -32,3 +32,5 @@ config KEYFX_ACTION_HOOK
 	  CI_ACTIONS. Disable it if a ZMK update breaks the build; CI_ACTIONS then do nothing.
 
 endif # KEYFX
+
+rsource "lab/Kconfig"

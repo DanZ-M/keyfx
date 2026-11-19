@@ -1,0 +1,72 @@
+# Test hardware on the dongle (joystick, MPU6050). Independent of the keyfx light engine.
+menu "keyfx dongle lab (test hardware on the dongle)"
+
+config KEYFX_LAB_JOYSTICK
+	bool "Analog joystick as pointing device (keyfx,joystick)"
+	default y
+	depends on DT_HAS_KEYFX_JOYSTICK_ENABLED
+	select ADC
+	select INPUT
+	select GPIO
+	help
+	  Reads two ADC channels and the push button and reports them as mouse movement
+	  (or scrolling) and left click through ZMK's input listener.
+
+if KEYFX_LAB_JOYSTICK
+
+choice KEYFX_LAB_JOY_MODE
+	prompt "What the stick does"
+	default KEYFX_LAB_JOY_MODE_MOUSE
+
+config KEYFX_LAB_JOY_MODE_MOUSE
+	bool "Mouse pointer"
+
+config KEYFX_LAB_JOY_MODE_SCROLL
+	bool "Scroll wheel (vertical and horizontal)"
+
+endchoice
+
+config KEYFX_LAB_JOY_SPEED
+	int "Speed at full deflection (pixels per second, or wheel steps per second)"
+	default 900 if KEYFX_LAB_JOY_MODE_MOUSE
+	default 12
+
+config KEYFX_LAB_JOY_DEADZONE
+	int "Dead zone around the centre (percent of the stick travel)"
+	default 12
+	range 0 60
+
+config KEYFX_LAB_JOY_RANGE
+	int "ADC counts from the centre position to the end of the travel"
+	default 1600
+	range 200 2000
+	help
+	  12 bit readings on a 3.3 V supply: the centre is about 1870 and the ends about 0 and
+	  3750, so about 1600 counts either way leaves a little margin. Turn on
+	  KEYFX_LAB_JOY_DEBUG to see the real values.
+
+config KEYFX_LAB_JOY_POLL_MS
+	int "Sampling period (ms)"
+	default 10
+	range 5 50
+
+config KEYFX_LAB_JOY_DEBUG
+	bool "Log the raw readings twice a second (needs ZMK_USB_LOGGING)"
+
+endif # KEYFX_LAB_JOYSTICK
+
+config KEYFX_LAB_IMU
+	bool "MPU6050: print the readings over the USB serial log"
+	default y
+	depends on DT_HAS_INVENSENSE_MPU6050_ENABLED
+	select SENSOR
+	imply MPU6050
+	help
+	  First bring-up test: logs acceleration (in milli-g) and rotation speed once per period.
+
+config KEYFX_LAB_IMU_PERIOD_MS
+	int "IMU print period (ms)"
+	default 500
+	depends on KEYFX_LAB_IMU
+
+endmenu
