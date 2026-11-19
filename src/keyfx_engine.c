@@ -509,7 +509,14 @@ static const struct ci_geo geo_keys[] = {CI_KEYS};
 static const struct ci_geo geo_extra[] = {CI_EXTRA_LEDS};
 
 #define CI_POSITIONS ARRAY_SIZE(geo_keys)
-#define CI_LOCAL_HALF (IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL) ? CI_LEFT : CI_RIGHT)
+/* Which half's LEDs this firmware drives: set CONFIG_KEYFX_HALF (1 left, 2 right) in the
+ * shield; 0 = automatic (central = left, peripheral = right, as with a two-part keyboard). */
+#define CI_LOCAL_HALF                                                                              \
+    (CONFIG_KEYFX_HALF == 1 ? CI_LEFT                                                              \
+     : CONFIG_KEYFX_HALF == 2 ? CI_RIGHT                                                           \
+                              : (IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL) ? CI_LEFT : CI_RIGHT))
+/* A dongle has no LED strip: the overlay node then has no `strip` and keyfx only computes. */
+#define CI_HAS_STRIP DT_INST_NODE_HAS_PROP(0, strip)
 #define CI_N DT_INST_PROP(0, chain_length)
 #define CI_MAX_FX 10
 
@@ -540,7 +547,11 @@ struct ov_config {
 };
 
 static const struct ov_config ov_cfg = {
+#if CI_HAS_STRIP
     .strip = DEVICE_DT_GET(DT_INST_PROP(0, strip)),
+#else
+    .strip = NULL,
+#endif
 };
 
 static K_MUTEX_DEFINE(ov_lock);
@@ -874,25 +885,29 @@ static uint16_t part_len(const struct ci_part *p, int32_t ref_dur) {
 }
 
 static void mixes_init(void) {
-    lx_min = lx_max = lx[0];
-    ly_min = ly_max = ly[0];
-    kx_min = ky_min = INT16_MAX;
-    kx_max = ky_max = INT16_MIN;
+    /* The whole keyboard's extent (both halves, keys and back LEDs), not just this half's:
+     * every half must agree on where an effect starts and ends. */
+    lx_min = ly_min = kx_min = ky_min = INT16_MAX;
+    lx_max = ly_max = kx_max = ky_max = INT16_MIN;
     for (size_t p = 0; p < CI_POSITIONS; p++) {
         kx_min = MIN(kx_min, geo_keys[p].x);
         kx_max = MAX(kx_max, geo_keys[p].x);
         ky_min = MIN(ky_min, geo_keys[p].y);
         ky_max = MAX(ky_max, geo_keys[p].y);
+        lx_min = MIN(lx_min, geo_keys[p].x);
+        lx_max = MAX(lx_max, geo_keys[p].x);
+        ly_min = MIN(ly_min, geo_keys[p].y);
+        ly_max = MAX(ly_max, geo_keys[p].y);
         if (geo_keys[p].x >= 0 && geo_keys[p].y >= 0 && geo_keys[p].x / 10 < SN_COLS &&
             geo_keys[p].y / 10 < SN_ROWS) {
             kgrid[geo_keys[p].y / 10][geo_keys[p].x / 10] = 1;
         }
     }
-    for (int i = 0; i < CI_N; i++) {
-        lx_min = MIN(lx_min, lx[i]);
-        lx_max = MAX(lx_max, lx[i]);
-        ly_min = MIN(ly_min, ly[i]);
-        ly_max = MAX(ly_max, ly[i]);
+    for (size_t i = 0; i < ARRAY_SIZE(geo_extra); i++) {
+        lx_min = MIN(lx_min, geo_extra[i].x);
+        lx_max = MAX(lx_max, geo_extra[i].x);
+        ly_min = MIN(ly_min, geo_extra[i].y);
+        ly_max = MAX(ly_max, geo_extra[i].y);
     }
     for (int m = 0; m < FX_COUNT - FX_BASE_COUNT; m++) {
         uint32_t total = 0;
@@ -1173,7 +1188,7 @@ static bool push_frame(int *rc_out) {
     animated |= paint_leader(now);
     bool fx_running = paint_effects(now);
 
-    *rc_out = led_strip_update_rgb(ov_cfg.strip, out_frame, CI_N);
+    *rc_out = ov_cfg.strip ? led_strip_update_rgb(ov_cfg.strip, out_frame, CI_N) : 0;
     return animated || fx_running;
 }
 
@@ -1203,6 +1218,9 @@ static void tick_fn(struct k_work *work) {
 }
 
 static void kick(void) {
+    if (!CI_HAS_STRIP) {
+        return; /* headless (dongle): nothing to draw */
+    }
     k_work_reschedule(&tick_work, K_NO_WAIT);
 }
 
@@ -1212,6 +1230,9 @@ static int ov_update_rgb(const struct device *dev, struct led_rgb *pixels, size_
     ARG_UNUSED(dev);
     int rc = 0;
 
+    if (!CI_HAS_STRIP) {
+        return 0; /* dongle: ZMK's underglow runs here only so that its keys reach the halves */
+    }
     k_mutex_lock(&ov_lock, K_FOREVER);
     size_t n = MIN(num_pixels, (size_t)CI_N);
     memcpy(last_frame, pixels, n * sizeof(struct led_rgb));
@@ -1240,21 +1261,16 @@ static const struct led_strip_driver_api ov_api = {
 /* ------------------------------------------------------------------------- */
 
 #if !CI_IS_CENTRAL
-/* The central sends the right half's lit keys as 4-bit palette entries, 14 per message,
- * in the order the right-half keys appear in CI_KEYS. */
+/* The central sends the lit leader keys of ALL positions as 4-bit palette entries, 14 per
+ * message (block 0 = positions 0-13, block 1 = 14-27, block 2 = 28-41). Each half paints
+ * only the ones that are under its own LEDs. */
 static void ld_apply(int base, uint32_t lo24, uint32_t hi32) {
-    int r = 0;
+    for (int n = 0; n < 14; n++) {
+        int p = base + n;
 
-    for (uint8_t p = 0; p < CI_POSITIONS; p++) {
-        if (geo_keys[p].half != CI_RIGHT) {
-            continue;
-        }
-        int n = r - base;
-
-        if (n >= 0 && n < 14) {
+        if (p < (int)CI_POSITIONS) {
             ld_pal[p] = n < 6 ? (lo24 >> (4 * n)) & 0xF : (hi32 >> (4 * (n - 6))) & 0xF;
         }
-        r++;
     }
     ld_any = false;
     for (uint8_t p = 0; p < CI_POSITIONS; p++) {
@@ -1306,8 +1322,8 @@ void keyfx_engine_command(uint32_t p1, uint32_t p2) {
         hid_ind = p2 & 0xFF;
         st_held = p2 >> 8;
         kick();
-    } else if (op == KEYFX_OP_LEADER_A || op == KEYFX_OP_LEADER_B) {
-        ld_apply(op == KEYFX_OP_LEADER_B ? 14 : 0, p1 & 0xFFFFFF, p2);
+    } else if (op == KEYFX_OP_LEADER_A || op == KEYFX_OP_LEADER_B || op == KEYFX_OP_LEADER_C) {
+        ld_apply(14 * (op - KEYFX_OP_LEADER_A), p1 & 0xFFFFFF, p2);
         kick();
     } else if (op == KEYFX_OP_FX) {
         k_mutex_lock(&ov_lock, K_FOREVER);
@@ -1321,7 +1337,7 @@ void keyfx_engine_command(uint32_t p1, uint32_t p2) {
 static int ov_init(const struct device *dev) {
     ARG_UNUSED(dev);
 
-    if (!device_is_ready(ov_cfg.strip)) {
+    if (CI_HAS_STRIP && !device_is_ready(ov_cfg.strip)) {
         LOG_ERR("LED strip not ready");
         return -ENODEV;
     }
@@ -1334,8 +1350,12 @@ static int ov_init(const struct device *dev) {
     return 0;
 }
 
-DEVICE_DT_INST_DEFINE(0, ov_init, NULL, NULL, NULL, POST_KERNEL, CONFIG_LED_STRIP_INIT_PRIORITY,
-                      &ov_api);
+#if CI_HAS_STRIP
+#define CI_INIT_PRIORITY CONFIG_LED_STRIP_INIT_PRIORITY
+#else
+#define CI_INIT_PRIORITY CONFIG_KERNEL_INIT_PRIORITY_DEFAULT
+#endif
+DEVICE_DT_INST_DEFINE(0, ov_init, NULL, NULL, NULL, POST_KERNEL, CI_INIT_PRIORITY, &ov_api);
 
 /* ------------------------------------------------------------------------- */
 /* Events                                                                    */
@@ -1737,28 +1757,20 @@ static uint32_t ld_code_at(uint8_t pos) {
 }
 
 static void ld_send(void) {
-    uint32_t nib[2] = {0, 0}; /* 14 nibbles per message: 6 in the low 24 bits, 8 in p2 */
-    uint32_t lo[2] = {0, 0}, hi[2] = {0, 0};
-    int r = 0;
+    uint32_t lo[3] = {0, 0, 0}, hi[3] = {0, 0, 0}; /* 14 nibbles per message: 6 in the low 24 bits, 8 in p2 */
 
-    for (uint8_t p = 0; p < CI_POSITIONS; p++) {
-        if (geo_keys[p].half != CI_RIGHT) {
-            continue;
-        }
-        int bank = r / 14, n = r % 14;
+    for (uint8_t p = 0; p < CI_POSITIONS && p < 42; p++) {
+        int bank = p / 14, n = p % 14;
 
-        if (bank < 2) {
-            if (n < 6) {
-                lo[bank] |= (uint32_t)ld_pal[p] << (4 * n);
-            } else {
-                hi[bank] |= (uint32_t)ld_pal[p] << (4 * (n - 6));
-            }
+        if (n < 6) {
+            lo[bank] |= (uint32_t)ld_pal[p] << (4 * n);
+        } else {
+            hi[bank] |= (uint32_t)ld_pal[p] << (4 * (n - 6));
         }
-        r++;
     }
-    ARG_UNUSED(nib);
     keyfx_sync_send(((uint32_t)KEYFX_OP_LEADER_A << 24) | lo[0], hi[0]);
     keyfx_sync_send(((uint32_t)KEYFX_OP_LEADER_B << 24) | lo[1], hi[1]);
+    keyfx_sync_send(((uint32_t)KEYFX_OP_LEADER_C << 24) | lo[2], hi[2]);
 }
 
 static void ld_resend(void) {

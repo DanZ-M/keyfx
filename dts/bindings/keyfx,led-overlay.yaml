@@ -9,9 +9,11 @@ include: base.yaml
 properties:
   strip:
     type: phandle
-    required: true
-    description: The real LED strip (e.g. the ws2812 node)
+    required: false
+    description: |
+      The real LED strip (e.g. the ws2812 node). Leave it out on a dongle that has no LEDs:
+      keyfx then only computes the lights and sends them to the keyboard halves.
   chain-length:
     type: int
     required: true
-    description: Number of LEDs; must match the real strip
+    description: Number of LEDs; must match the real strip (any number >= 1 without a strip)

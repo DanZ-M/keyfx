@@ -1,9 +1,19 @@
 config KEYFX
 	bool "keyfx WS2812 light engine (indicators, effects, left/right sync)"
 	default y
-	depends on ZMK_RGB_UNDERGLOW && DT_HAS_KEYFX_LED_OVERLAY_ENABLED
+	depends on DT_HAS_KEYFX_LED_OVERLAY_ENABLED
 
 if KEYFX
+
+config KEYFX_HALF
+	int "Which half of CI_KEYS this firmware lights: 1 = left, 2 = right, 0 = automatic"
+	default 0
+	range 0 2
+	help
+	  Automatic means the central half is the left one and the peripheral is the right
+	  one (a normal two-part keyboard). With a dongle both halves are peripherals, so the
+	  shield sets this: 1 for the left half, 2 for the right half. The dongle itself has no
+	  LED strip and keyfx there only works out what the halves have to show.
 
 config KEYFX_CAPS_WORD_PEEK
 	bool "Detect caps word by reading the caps word behavior's state"

@@ -305,6 +305,30 @@ The timeout comes from the leader behavior's `timeout-ms`, or from `CI_LEADER_TI
 
 ---
 
+## Dongle (a central without keys or LEDs)
+
+keyfx also works when the keyboard has a **dongle**: a board with no keys that is the central, while the left and right halves are both peripherals. The dongle runs the keymap and keyfx works out what to show; each half draws it on its own LEDs.
+
+What you need:
+
+1. **The dongle's overlay** has a `keyfx,led-overlay` node **without** `strip` (it has no LEDs):
+   ```dts
+   led_overlay: led_overlay {
+       compatible = "keyfx,led-overlay";
+       chain-length = <27>;   /* any number, not used */
+   };
+   ```
+   and the `kfx` behavior node, like on the halves. If your keymap has RGB keys (`&rgb_ug ...`) also set `zmk,underglow = &led_overlay;` in `chosen` and `CONFIG_ZMK_RGB_UNDERGLOW=y` on the dongle: the behavior must exist on the central for ZMK to forward the key to the halves; keyfx accepts and discards the frames.
+2. **Each half** tells keyfx which half it is, so a half that is a peripheral of a dongle still lights the right keys. In the shield's `Kconfig.defconfig`:
+   ```
+   config KEYFX_HALF
+       default 1    # left half (2 for the right half)
+   ```
+   With the value 0 (default) the central is the left half and the peripheral the right one, as in a normal two-part keyboard.
+3. Build the halves as peripherals (`-DCONFIG_ZMK_SPLIT=y -DCONFIG_ZMK_SPLIT_ROLE_CENTRAL=n`) and give the dongle `CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS=2`, `CONFIG_BT_MAX_CONN=7`, `CONFIG_BT_MAX_PAIRED=7` (see ZMK's dongle guide).
+
+Everything else (rules, effects, leader lights, bootloader light) works as before. Both halves now also agree on where an effect is, because the board's extent is computed from the whole geometry, not from the half that is running.
+
 ## 4. Updating
 
 Change the `revision` of `keyfx` in `west.yml` (or leave `main`) and rebuild.

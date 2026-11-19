@@ -5,8 +5,9 @@
 #define KEYFX_OP_CMD   0x00 /* user command from a key (&kfx KFX_xxx n) */
 #define KEYFX_OP_STATE 0x01 /* central -> peripheral: layers, mods, flags */
 #define KEYFX_OP_FX    0x02 /* central -> peripheral: start an effect     */
-#define KEYFX_OP_LEADER_A 0x03 /* central -> peripheral: leader lights, keys 0-13  */
-#define KEYFX_OP_LEADER_B 0x04 /* central -> peripheral: leader lights, keys 14-27 */
+#define KEYFX_OP_LEADER_A 0x03 /* central -> peripheral: leader lights, positions 0-13  */
+#define KEYFX_OP_LEADER_B 0x04 /* central -> peripheral: leader lights, positions 14-27 */
+#define KEYFX_OP_LEADER_C 0x05 /* central -> peripheral: leader lights, positions 28-41 */
 
 /* Called by the behavior driver on whichever half receives the invocation. */
 void keyfx_engine_command(uint32_t param1, uint32_t param2);
