@@ -13,8 +13,9 @@ if(CONFIG_KEYFX)
 endif()
 
 # ---- dongle lab: test hardware (see lab/) ----
-if(CONFIG_KEYFX_LAB_JOYSTICK OR CONFIG_KEYFX_LAB_IMU)
+if(CONFIG_KEYFX_LAB_JOYSTICK OR CONFIG_KEYFX_LAB_IMU OR CONFIG_KEYFX_LAB_IMU_MOUSE)
   zephyr_library_named(keyfx_lab)
   zephyr_library_sources_ifdef(CONFIG_KEYFX_LAB_JOYSTICK lab/joystick.c)
   zephyr_library_sources_ifdef(CONFIG_KEYFX_LAB_IMU lab/imu.c)
+  zephyr_library_sources_ifdef(CONFIG_KEYFX_LAB_IMU_MOUSE lab/imu_mouse.c)
 endif()

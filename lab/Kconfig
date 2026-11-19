@@ -58,7 +58,7 @@ endif # KEYFX_LAB_JOYSTICK
 config KEYFX_LAB_IMU
 	bool "MPU6050: print the readings over the USB serial log"
 	default y
-	depends on DT_HAS_INVENSENSE_MPU6050_ENABLED
+	depends on DT_HAS_INVENSENSE_MPU6050_ENABLED && !KEYFX_LAB_IMU_MOUSE
 	select SENSOR
 	imply MPU6050
 	help
@@ -68,5 +68,65 @@ config KEYFX_LAB_IMU_PERIOD_MS
 	int "IMU print period (ms)"
 	default 500
 	depends on KEYFX_LAB_IMU
+
+config KEYFX_LAB_IMU_MOUSE
+	bool "Motion sensor (MPU6050) as pointing device (keyfx,imu-mouse)"
+	default y
+	depends on DT_HAS_KEYFX_IMU_MOUSE_ENABLED
+	select SENSOR
+	select INPUT
+	select GPIO
+	imply MPU6050
+	help
+	  Tilt the dongle to move the pointer, or turn it like an air mouse. This replaces the
+	  plain serial-log test above, because both would read the same sensor.
+
+if KEYFX_LAB_IMU_MOUSE
+
+choice KEYFX_LAB_IMU_MODE
+	prompt "How the motion moves the pointer"
+	default KEYFX_LAB_IMU_MODE_TILT
+
+config KEYFX_LAB_IMU_MODE_TILT
+	bool "Tilt (the further you tilt, the faster it moves)"
+
+config KEYFX_LAB_IMU_MODE_GYRO
+	bool "Air mouse (rotation speed)"
+
+endchoice
+
+config KEYFX_LAB_IMU_SPEED
+	int "Tilt mode: speed at full tilt (pixels per second)"
+	default 700
+
+config KEYFX_LAB_IMU_TILT_RANGE
+	int "Tilt mode: tilt in milli-g that counts as full tilt"
+	default 500
+	range 100 1000
+	help
+	  500 mg is about 30 degrees.
+
+config KEYFX_LAB_IMU_TILT_DEADZONE
+	int "Tilt mode: dead zone around the neutral pose (percent of the range)"
+	default 10
+	range 0 60
+
+config KEYFX_LAB_IMU_GYRO_GAIN
+	int "Air mouse mode: pixels per degree turned"
+	default 15
+
+config KEYFX_LAB_IMU_GYRO_DEADZONE
+	int "Air mouse mode: ignore rotation slower than this (milli-degrees per second)"
+	default 1200
+
+config KEYFX_LAB_IMU_POLL_MS
+	int "Sampling period (ms)"
+	default 10
+	range 5 50
+
+config KEYFX_LAB_IMU_DEBUG
+	bool "Log the readings twice a second (needs the zmk-usb-logging snippet)"
+
+endif # KEYFX_LAB_IMU_MOUSE
 
 endmenu
