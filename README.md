@@ -357,3 +357,7 @@ When you upload a new version to GitHub, files you deleted locally stay on GitHu
 | `CONFIG_KEYFX` | y (when underglow and the overlay exist) | Turn keyfx on |
 | `CONFIG_KEYFX_ACTION_HOOK` | y (central) | Lets effects and leader lights follow real actions |
 | `CONFIG_KEYFX_CAPS_WORD_PEEK` | y | Reads Caps Word state for the Caps Word indicator |
+
+### Dongle: halves do not connect
+
+If the dongle's log repeats `Source not connected` and its scan finds no half, the halves are not advertising: flash `settings_reset` on all three boards, use `korz_left_peripheral` (not `korz_left`) on the left half, and **unplug the USB cable of each half after copying the `.uf2`** (a half left on USB may not restart into the new firmware). Remove old pairings from the computer and phone too.

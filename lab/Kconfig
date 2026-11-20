@@ -129,4 +129,23 @@ config KEYFX_LAB_IMU_DEBUG
 
 endif # KEYFX_LAB_IMU_MOUSE
 
+config KEYFX_LAB_EPD_REFRESH
+	bool "e-paper: partial updates plus a periodic full refresh against ghosting"
+	default y
+	depends on ZMK_DISPLAY && DT_HAS_SOLOMON_SSD1681_ENABLED
+
+if KEYFX_LAB_EPD_REFRESH
+
+config KEYFX_LAB_EPD_FULL_IDLE_S
+	int "Full refresh after this many seconds without changes"
+	default 20
+	range 1 3600
+
+config KEYFX_LAB_EPD_FULL_AFTER_CHANGES
+	int "Full refresh after this many changes in a row (0 = only when idle)"
+	default 12
+	range 0 1000
+
+endif # KEYFX_LAB_EPD_REFRESH
+
 endmenu
