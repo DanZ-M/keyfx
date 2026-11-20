@@ -120,7 +120,7 @@ static void output_update(struct output_state s)
 static struct output_state output_get_state(const zmk_event_t *eh)
 {
 	return (struct output_state){
-		.selected_endpoint = zmk_endpoints_selected(),
+		.selected_endpoint = zmk_endpoint_get_selected(),
 		.profile_connected = zmk_ble_active_profile_is_connected(),
 		.profile_bonded = !zmk_ble_active_profile_is_open(),
 	};
@@ -156,7 +156,7 @@ static void profile_update(struct profile_state s)
 static struct profile_state profile_get_state(const zmk_event_t *eh)
 {
 	return (struct profile_state){
-		.selected_endpoint = zmk_endpoints_selected(),
+		.selected_endpoint = zmk_endpoint_get_selected(),
 		.index = zmk_ble_active_profile_index(),
 	};
 }
