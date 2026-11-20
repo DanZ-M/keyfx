@@ -148,4 +148,45 @@ config KEYFX_LAB_EPD_FULL_AFTER_CHANGES
 
 endif # KEYFX_LAB_EPD_REFRESH
 
+config KEYFX_LAB_EPD_SCREEN
+	bool "e-paper: status screen with the widgets of the old left OLED"
+	depends on ZMK_DISPLAY && ZMK_DISPLAY_STATUS_SCREEN_CUSTOM
+	select LV_USE_IMAGE
+	select ZMK_WPM
+	help
+	  Battery, output (USB / Bluetooth), profile, the layer as a rolling ball and the pet, drawn for a 200x200
+	  panel. Needs CONFIG_ZMK_DISPLAY_STATUS_SCREEN_CUSTOM=y.
+
+if KEYFX_LAB_EPD_SCREEN
+
+config KEYFX_LAB_EPD_LAYER0_DIR
+	int "Layer 0: direction the ball rolls (degrees, 0 = right, 90 = down; -1 = at rest)"
+	default -1
+	range -1 359
+
+config KEYFX_LAB_EPD_LAYER1_DIR
+	int "Layer 1: direction the ball rolls"
+	default 0
+	range -1 359
+
+config KEYFX_LAB_EPD_LAYER2_DIR
+	int "Layer 2: direction the ball rolls"
+	default 45
+	range -1 359
+
+config KEYFX_LAB_EPD_LAYER3_DIR
+	int "Layer 3: direction the ball rolls"
+	default 270
+	range -1 359
+
+config KEYFX_LAB_EPD_PET_WALK_WPM
+	int "Typing speed (WPM) from which the pet walks"
+	default 10
+
+config KEYFX_LAB_EPD_PET_RUN_WPM
+	int "Typing speed (WPM) from which the pet runs"
+	default 50
+
+endif # KEYFX_LAB_EPD_SCREEN
+
 endmenu
