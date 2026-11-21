@@ -2,7 +2,7 @@
  * keyfx dongle lab: status screen for the e-paper, made of the widgets of the old left OLED.
  *
  *   top row   : output (USB / Bluetooth state), profile (USB or BLE 1..5), battery
- *   below     : the active layer (a ball rolling in the direction set for the layer), and the pet
+ *   below     : the layers engraved on a sphere (active one in the dark band), and the dog
  *               (sits / walks / runs by typing speed)
  *
  * Ported from HellTM's custom widgets (MIT) to the LVGL 9 API. The right half's widgets
@@ -36,6 +36,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <zmk/events/wpm_state_changed.h>
 
 #include "epd_icons.h"
+#include "epd_refresh.h"
 
 static lv_obj_t *battery_obj;
 static lv_obj_t *output_obj;
@@ -47,7 +48,10 @@ static lv_obj_t *pet_obj;
 static void show(lv_obj_t *obj, const lv_image_dsc_t *img)
 {
 	if (lv_image_get_src(obj) != (const void *)img) {
+		epd_refresh_touch(obj); /* where it was ... */
 		lv_image_set_src(obj, img);
+		epd_refresh_touch(obj); /* ... and where it is now */
+		epd_refresh_note();
 	}
 }
 
@@ -171,15 +175,7 @@ ZMK_SUBSCRIPTION(epd_widget_profile, zmk_usb_conn_state_changed);
 ZMK_SUBSCRIPTION(epd_widget_profile, zmk_ble_active_profile_changed);
 #endif
 
-/* ---- layer: a ball that rolls in the direction chosen for the layer ---- */
-
-/* degrees: 0 = right, 90 = down, 180 = left, 270 = up; -1 = the ball rests */
-static const int16_t layer_dir[4] = {
-	CONFIG_KEYFX_LAB_EPD_LAYER0_DIR,
-	CONFIG_KEYFX_LAB_EPD_LAYER1_DIR,
-	CONFIG_KEYFX_LAB_EPD_LAYER2_DIR,
-	CONFIG_KEYFX_LAB_EPD_LAYER3_DIR,
-};
+/* ---- layer: the layers engraved on a sphere; the active one faces the viewer ---- */
 
 struct layer_state {
 	uint8_t index;
@@ -187,14 +183,8 @@ struct layer_state {
 
 static void layer_update(struct layer_state s)
 {
-	if (s.index >= ARRAY_SIZE(layer_dir)) {
-		show(layer_obj, &epd_ball_unknown); /* a layer without a ball: empty ball */
-		return;
-	}
-	int dir = layer_dir[s.index];
-
-	/* [0] = at rest, [1..8] = 0, 45, ... 315 degrees */
-	show(layer_obj, epd_ball_icon[dir < 0 ? 0 : 1 + ((dir + 22) / 45) % 8]);
+	/* layers 0..3 = BASE, NUMB, MOUSE, FUNC; any other layer shows the empty sphere */
+	show(layer_obj, s.index < 4 ? epd_sphere_icon[s.index] : &epd_sphere_unknown);
 }
 
 static struct layer_state layer_get_state(const zmk_event_t *eh)
@@ -244,8 +234,8 @@ lv_obj_t *zmk_display_status_screen(void)
 	output_obj = lv_image_create(screen);
 	profile_obj = lv_image_create(screen);
 	battery_obj = lv_image_create(screen);
-	layer_obj = lv_image_create(screen);
 	pet_obj = lv_image_create(screen);
+	layer_obj = lv_image_create(screen);
 
 	/* the pictures first (the sizes are needed to place them), then the places */
 	epd_widget_output_init();
@@ -257,7 +247,7 @@ lv_obj_t *zmk_display_status_screen(void)
 	lv_obj_align(output_obj, LV_ALIGN_TOP_LEFT, 8, 8);
 	lv_obj_align(profile_obj, LV_ALIGN_TOP_LEFT, 56, 14);
 	lv_obj_align(battery_obj, LV_ALIGN_TOP_RIGHT, -8, 8);
-	lv_obj_align(layer_obj, LV_ALIGN_TOP_RIGHT, -8, 48);
+	lv_obj_align(layer_obj, LV_ALIGN_TOP_RIGHT, -2, 46);
 	lv_obj_align(pet_obj, LV_ALIGN_BOTTOM_LEFT, 8, -8);
 
 	return screen;
