@@ -11,13 +11,3 @@ if(CONFIG_KEYFX)
     zephyr_ld_options(-Wl,--wrap=zmk_behavior_invoke_binding)
   endif()
 endif()
-
-# ---- dongle lab: test hardware (see lab/) ----
-if(CONFIG_KEYFX_LAB_JOYSTICK OR CONFIG_KEYFX_LAB_IMU OR CONFIG_KEYFX_LAB_IMU_MOUSE OR CONFIG_KEYFX_LAB_EPD_REFRESH OR CONFIG_KEYFX_LAB_EPD_SCREEN)
-  zephyr_library_named(keyfx_lab)
-  zephyr_library_sources_ifdef(CONFIG_KEYFX_LAB_JOYSTICK lab/joystick.c)
-  zephyr_library_sources_ifdef(CONFIG_KEYFX_LAB_IMU lab/imu.c)
-  zephyr_library_sources_ifdef(CONFIG_KEYFX_LAB_IMU_MOUSE lab/imu_mouse.c)
-  zephyr_library_sources_ifdef(CONFIG_KEYFX_LAB_EPD_REFRESH lab/epd_refresh.c)
-  zephyr_library_sources_ifdef(CONFIG_KEYFX_LAB_EPD_SCREEN lab/epd_screen.c lab/epd_icons.c)
-endif()
